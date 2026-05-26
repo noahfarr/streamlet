@@ -48,7 +48,7 @@ import jax.numpy as jnp
 from stremax.algorithms import StreamQ, StreamQConfig
 from stremax.environments import environment
 from stremax.networks import Flatten, heads, sparse
-from stremax.optimizers import OBGD, OBGDConfig
+from stremax.optimizers import ObGD, ObGDConfig
 
 env, env_params = environment.make("gymnax::Breakout-MinAtar")
 num_actions = env.action_space(env_params).n
@@ -63,7 +63,7 @@ q_network = nn.Sequential([
     heads.DiscreteQNetwork(action_dim=num_actions, kernel_init=sparse_init),
 ])
 
-optimizer = OBGD(OBGDConfig(lr=1.0, kappa=2.0))
+optimizer = ObGD(ObGDConfig(lr=1.0, kappa=2.0))
 epsilon = lambda step: jnp.maximum(1.0 - step / 1e6, 0.01)
 
 agent = StreamQ(cfg, env, env_params, q_network, epsilon, optimizer)

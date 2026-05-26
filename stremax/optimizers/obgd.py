@@ -10,7 +10,7 @@ from stremax.utils.typing import Array, PyTree
 
 
 @struct.dataclass(frozen=True)
-class OBGDConfig:
+class ObGDConfig:
     lr: float
     kappa: float = 2.0
     beta2: float = 0.999
@@ -19,31 +19,31 @@ class OBGDConfig:
 
 
 @struct.dataclass(frozen=True)
-class OBGDState:
+class ObGDState:
     second_moment: PyTree
     t_step: Array
 
 
 @dataclass
-class OBGD:
+class ObGD:
 
-    cfg: OBGDConfig
+    cfg: ObGDConfig
     name: str = "obgd"
 
-    def init(self, parameters: PyTree, num_envs: int) -> OBGDState:
+    def init(self, parameters: PyTree, num_envs: int) -> ObGDState:
         second_moment = jax.tree.map(
             lambda p: jnp.zeros((num_envs, *p.shape), dtype=jnp.float32),
             parameters,
         )
-        return OBGDState(second_moment=second_moment, t_step=jnp.int32(0))
+        return ObGDState(second_moment=second_moment, t_step=jnp.int32(0))
 
     def update(
         self,
-        state: OBGDState,
+        state: ObGDState,
         gradient: PyTree,
         trace: PyTree,
         td_error: Array,
-    ) -> tuple[PyTree, OBGDState]:
+    ) -> tuple[PyTree, ObGDState]:
         del gradient
         cfg = self.cfg
         next_t_step = state.t_step + 1
@@ -109,4 +109,4 @@ class OBGD:
             }
         )
 
-        return updates, OBGDState(second_moment=new_v, t_step=next_t_step)
+        return updates, ObGDState(second_moment=new_v, t_step=next_t_step)

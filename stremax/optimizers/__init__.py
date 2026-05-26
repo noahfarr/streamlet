@@ -4,6 +4,6 @@ from .intentional import (
     IntentionalOptimizerConfig,
     IntentionalOptimizerState,
 )
-from .obgd import OBGD, OBGDConfig, OBGDState
+from .obgd import ObGD, ObGDConfig, ObGDState
 from .optimizer import Optimizer
 from .wrappers import OptaxOptimizer, OptaxOptimizerState, inject_logger

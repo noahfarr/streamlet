@@ -16,7 +16,7 @@ from stremax.environments.wrappers import (
 )
 from stremax.loggers import DashboardLogger, MultiLogger
 from stremax.networks import Flatten, heads, sparse
-from stremax.optimizers import OBGD, OBGDConfig
+from stremax.optimizers import ObGD, ObGDConfig
 
 total_timesteps = 5_000_000
 num_epochs = 100
@@ -67,8 +67,8 @@ critic_network = nn.Sequential(
     ]
 )
 
-actor_optimizer = OBGD(
-    cfg=OBGDConfig(
+actor_optimizer = ObGD(
+    cfg=ObGDConfig(
         lr=1.0,
         kappa=3.0,
         beta2=0.999,
@@ -76,8 +76,8 @@ actor_optimizer = OBGD(
         adaptive=False,
     ),
 )
-critic_optimizer = OBGD(
-    cfg=OBGDConfig(
+critic_optimizer = ObGD(
+    cfg=ObGDConfig(
         lr=1.0,
         kappa=2.0,
         beta2=0.999,
