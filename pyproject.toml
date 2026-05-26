@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "strelax"
+version = "0.1.0"
+description = "Strelax: Streaming RL in JAX"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jax[cuda12]>=0.7.0 ; sys_platform == 'linux'",
+    "jax>=0.7.0 ; sys_platform == 'darwin'",
+    "flax>=0.10.2",
+    "lox",
+    "distrax>=0.1.5",
+    "gymnax>=0.0.9",
+    "brax>=0.10.0",
+]
+
+
+[tool.uv.sources]
+lox = { git = "https://github.com/huterguier/lox" }
