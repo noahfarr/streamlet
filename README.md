@@ -1,5 +1,5 @@
 <h1 align="center">
-  <b>Strelax</b><br>
+  <b>Stremax</b><br>
   <b>Streaming Reinforcement Learning in JAX</b><br>
 </h1>
 
@@ -9,7 +9,7 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" /></a>
 </p>
 
-Most deep RL is built around large replay buffers and big batched updates. `Strelax` takes the opposite approach. It implements *streaming* RL, where the agent learns online from each transition the moment it arrives, batch size one, no replay buffer, using eligibility traces and optimizers designed to stay stable in that regime. Everything is written in JAX, so every algorithm is `jit`-compatible and `vmap`s cleanly over random seeds, turning a streaming agent that learns from one transition at a time into a fast, fully reproducible experiment.
+Most deep RL is built around large replay buffers and big batched updates. `Stremax` takes the opposite approach. It implements *streaming* RL, where the agent learns online from each transition the moment it arrives, batch size one, no replay buffer, using eligibility traces and optimizers designed to stay stable in that regime. Everything is written in JAX, so every algorithm is `jit`-compatible and `vmap`s cleanly over random seeds, turning a streaming agent that learns from one transition at a time into a fast, fully reproducible experiment.
 
 <h2> ✨ Features </h2>
 
@@ -23,18 +23,18 @@ Most deep RL is built around large replay buffers and big batched updates. `Stre
 
 <h2> 📥 Installation</h2>
 
-`Strelax` uses [`uv`](https://github.com/astral-sh/uv) and requires Python ≥ 3.12. Clone and sync:
+`Stremax` uses [`uv`](https://github.com/astral-sh/uv) and requires Python ≥ 3.12. Clone and sync:
 
 ```bash
-git clone https://github.com/noahfarr/strelax.git
-cd strelax
+git clone https://github.com/noahfarr/stremax.git
+cd stremax
 uv sync
 ```
 
-This installs JAX with CUDA 12 support on Linux and CPU/Metal JAX on macOS. To add `Strelax` to an existing project:
+This installs JAX with CUDA 12 support on Linux and CPU/Metal JAX on macOS. To add `Stremax` to an existing project:
 
 ```bash
-uv add git+https://github.com/noahfarr/strelax.git
+uv add git+https://github.com/noahfarr/stremax.git
 ```
 
 <h2> 🚀 Quick Start</h2>
@@ -45,10 +45,10 @@ Train a streaming Q(λ) agent on MinAtar Breakout:
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from strelax.algorithms import StreamQ, StreamQConfig
-from strelax.environments import environment
-from strelax.networks import Flatten, heads, sparse
-from strelax.optimizers import OBGD, OBGDConfig
+from stremax.algorithms import StreamQ, StreamQConfig
+from stremax.environments import environment
+from stremax.networks import Flatten, heads, sparse
+from stremax.optimizers import OBGD, OBGDConfig
 
 env, env_params = environment.make("gymnax::Breakout-MinAtar")
 num_actions = env.action_space(env_params).n
@@ -79,9 +79,9 @@ Every algorithm exposes the same interface: `init` → `warmup` (optional) → `
 <h2> 📂 Project Structure</h2>
 
 ```
-strelax/
+stremax/
 ├─ examples/          # Runnable scripts (Stream Q / SARSA / AC, QRC, AVG on MinAtar & Brax)
-├─ strelax/
+├─ stremax/
    ├─ algorithms/     # StreamQ, StreamSARSA, StreamAC, QRC, AVG
    ├─ optimizers/     # ObGD, AdaptiveQ, IntentionalOptimizer, optax wrapper
    ├─ environments/   # Gymnax / Brax / ALE / Gymnasium adapters + wrappers
@@ -95,13 +95,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 <h2> 📚 Citation</h2>
 
-If you use `Strelax` for your work, please cite:
+If you use `Stremax` for your work, please cite:
 ```
-@software{strelax2026github,
-  title   = {Strelax: Streaming Reinforcement Learning in JAX},
+@software{stremax2026github,
+  title   = {Stremax: Streaming Reinforcement Learning in JAX},
   author  = {Noah Farr},
   year    = {2026},
-  url     = {https://github.com/noahfarr/strelax}
+  url     = {https://github.com/noahfarr/stremax}
 }
 ```
 

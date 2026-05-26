@@ -1930,7 +1930,7 @@ wheels = [
 ]
 
 [[package]]
-name = "strelax"
+name = "stremax"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

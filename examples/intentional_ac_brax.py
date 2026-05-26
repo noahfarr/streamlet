@@ -5,16 +5,16 @@ import jax
 import jax.numpy as jnp
 import lox
 
-from strelax.algorithms import StreamAC, StreamACConfig
-from strelax.environments import environment
-from strelax.environments.wrappers import (
+from stremax.algorithms import StreamAC, StreamACConfig
+from stremax.environments import environment
+from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
 )
-from strelax.loggers import DashboardLogger, MultiLogger
-from strelax.networks import heads, sparse
-from strelax.optimizers import IntentionalOptimizer, IntentionalOptimizerConfig
+from stremax.loggers import DashboardLogger, MultiLogger
+from stremax.networks import heads, sparse
+from stremax.optimizers import IntentionalOptimizer, IntentionalOptimizerConfig
 
 total_timesteps = 5_000_000
 num_epochs = 100

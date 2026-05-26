@@ -7,16 +7,16 @@ import lox
 import optax
 from flax.linen.initializers import orthogonal, zeros
 
-from strelax.algorithms import AVG, AVGConfig
-from strelax.environments import environment
-from strelax.environments.wrappers import (
+from stremax.algorithms import AVG, AVGConfig
+from stremax.environments import environment
+from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
 )
-from strelax.loggers import DashboardLogger, MultiLogger
-from strelax.networks import heads
-from strelax.optimizers import OptaxOptimizer
+from stremax.loggers import DashboardLogger, MultiLogger
+from stremax.networks import heads
+from stremax.optimizers import OptaxOptimizer
 
 total_timesteps = 5_000_000
 num_epochs = 100
