@@ -15,10 +15,10 @@ Most deep RL is built around large replay buffers and big batched updates. `Stre
 
 | | Details |
 |---|---|
-| 🤖 **Algorithms** | [Stream Q(λ)](https://arxiv.org/abs/2410.14606), [Stream AC(λ)](https://arxiv.org/abs/2410.14606) — online control with eligibility traces, no replay buffer |
-| ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606) (overshooting-bounded gradient descent), `IntentionalOptimizer`, and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
-| 🧬 **Networks** | Flax heads for discrete Q-values, value functions, and categorical / Gaussian policies. [Sparse initialization](https://arxiv.org/abs/2410.14606). Composable `torso` → `head` pipeline |
-| 🎮 **Environments** | [Gymnax](https://github.com/RobertTLange/gymnax), [Brax](https://github.com/google/brax) behind a single `make("namespace::env_id")` entry point |
+| 🤖 **Algorithms** | [Stream Q(λ)](https://arxiv.org/abs/2410.14606), [Stream AC(λ)](https://arxiv.org/abs/2410.14606), Stream SARSA(λ), [QRC](https://arxiv.org/abs/2007.00611) (Q-learning with regularized corrections), and [AVG](https://arxiv.org/abs/2411.15370) (action-value gradient for continuous control) — all online, with eligibility traces and no replay buffer |
+| ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606) (overshooting-bounded gradient descent), [`AdaptiveQ`](https://arxiv.org/abs/2605.06764) (Adam-style adaptive step sizes), `IntentionalOptimizer`, and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
+| 🧬 **Networks** | Flax heads for discrete and continuous Q-values, value functions, and categorical / Gaussian policies (state-dependent, state-independent, and squashed). [Sparse initialization](https://arxiv.org/abs/2410.14606). Composable `torso` → `head` pipeline |
+| 🎮 **Environments** | [Gymnax](https://github.com/RobertTLange/gymnax), [Brax](https://github.com/google/brax), [ALE](https://github.com/Farama-Foundation/Arcade-Learning-Environment), and [Gymnasium](https://github.com/Farama-Foundation/Gymnasium) behind a single `make("namespace::env_id")` entry point |
 | 🧰 **Wrappers** | Observation / reward normalization, episode-statistics recording, sticky actions |
 | 📊 **Logging** | In-graph structured logging via [`lox`](https://github.com/huterguier/lox) |
 
@@ -104,13 +104,13 @@ Swapping in `StreamAC` with the `IntentionalOptimizer` on a Brax control task is
 
 ```
 strelax/
-├─ examples/          # Small runnable scripts (Stream Q / AC on MinAtar & Brax)
+├─ examples/          # Runnable scripts (Stream Q / SARSA / AC, QRC, AVG on MinAtar & Brax)
 ├─ strelax/
-   ├─ algorithms/     # StreamQ, StreamAC
-   ├─ optimizers/     # ObGD, IntentionalOptimizer, optax wrapper
-   ├─ environments/   # Gymnax / Brax adapters + wrappers
-   ├─ networks/       # heads, layers, sparse initialization
-   └─ utils/          # Timestep, Transition, helpers
+   ├─ algorithms/     # StreamQ, StreamSARSA, StreamAC, QRC, AVG
+   ├─ optimizers/     # ObGD, AdaptiveQ, IntentionalOptimizer, optax wrapper
+   ├─ environments/   # Gymnax / Brax / ALE / Gymnasium adapters + wrappers
+   ├─ networks/       # heads, layers, initializers
+   └─ utils/          # Timestep, Transition, TD-error scaler, helpers
 ```
 
 <h2> 📄 License</h2>
