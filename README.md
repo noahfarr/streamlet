@@ -9,7 +9,7 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" /></a>
 </p>
 
-Most deep RL is built around large replay buffers and big batched updates. `Strelax` takes the opposite approach. It implements *streaming* RL, where the agent learns online from each transition the moment it arrives — batch size one, no replay buffer — using eligibility traces and optimizers designed to stay stable in that regime. Everything is written in JAX, so every algorithm is `jit`-compatible and `vmap`s cleanly over random seeds, turning a streaming agent that learns from one transition at a time into a fast, fully reproducible experiment. The name is a portmanteau of **stream** and **[JAX](https://github.com/jax-ml/jax)**.
+Most deep RL is built around large replay buffers and big batched updates. `Strelax` takes the opposite approach. It implements *streaming* RL, where the agent learns online from each transition the moment it arrives, batch size one, no replay buffer, using eligibility traces and optimizers designed to stay stable in that regime. Everything is written in JAX, so every algorithm is `jit`-compatible and `vmap`s cleanly over random seeds, turning a streaming agent that learns from one transition at a time into a fast, fully reproducible experiment. The name is a portmanteau of **stream** and **[JAX](https://github.com/jax-ml/jax)**.
 
 <h2> ✨ Features </h2>
 
