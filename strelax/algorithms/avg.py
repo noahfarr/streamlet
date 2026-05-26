@@ -9,6 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
+from strelax.optimizers import Optimizer
 from strelax.utils import Timestep, Transition, TDErrorScalerState, broadcast
 from strelax.utils.typing import (
     Array,
@@ -51,15 +52,22 @@ class AVG:
     env_params: EnvParams
     actor_network: nn.Module
     critic_network: nn.Module
-    actor_optimizer: optax.GradientTransformation
-    critic_optimizer: optax.GradientTransformation
+    actor_optimizer: Optimizer
+    critic_optimizer: Optimizer
+
+    def _sample_action(
+        self, params: PyTree, obs: Array, key: Key
+    ) -> tuple[Array, Array]:
+        dist = self.actor_network.apply(params, obs)
+        return dist.sample_and_log_prob(seed=key)
 
     def _stochastic_action(
         self, key: Key, state: AVGState
     ) -> tuple[Array, Array]:
-        dist = self.actor_network.apply(state.actor_params, state.obs)
-        action, log_prob = dist.sample_and_log_prob(seed=key)
-        return action, log_prob
+        keys = jax.random.split(key, self.cfg.num_envs)
+        return jax.vmap(self._sample_action, in_axes=(None, 0, 0))(
+            state.actor_params, state.obs, keys
+        )
 
     def _deterministic_action(
         self, key: Key, state: AVGState
@@ -101,10 +109,12 @@ class AVG:
     def _update_step(
         self, state: AVGState, key: Key
     ) -> tuple[AVGState, None]:
-        action_key, step_key, next_action_key = jax.random.split(key, 3)
+        sample_key, step_key, next_action_key = jax.random.split(key, 3)
+        action_keys = jax.random.split(sample_key, self.cfg.num_envs)
 
-        dist = self.actor_network.apply(state.actor_params, state.obs)
-        action, log_prob = dist.sample_and_log_prob(seed=action_key)
+        action, log_prob = jax.vmap(self._sample_action, in_axes=(None, 0, 0))(
+            state.actor_params, state.obs, action_keys
+        )
         action = jax.lax.stop_gradient(action)
         log_prob = jax.lax.stop_gradient(log_prob)
 
@@ -136,25 +146,25 @@ class AVG:
         )
         td_error = (reward + not_done * self.cfg.gamma * target_v - q) / sigma
 
-        def compute_actor_loss(actor_params: PyTree) -> Array:
-            dist = self.actor_network.apply(actor_params, state.obs)
-            reparam_action, reparam_log_prob = dist.sample_and_log_prob(
-                seed=action_key
-            )
+        def compute_actor_loss(actor_params: PyTree, obs: Array, key: Key) -> Array:
+            dist = self.actor_network.apply(actor_params, obs)
+            reparam_action, reparam_log_prob = dist.sample_and_log_prob(seed=key)
             reparam_q = self.critic_network.apply(
-                jax.lax.stop_gradient(state.critic_params),
-                state.obs,
-                reparam_action,
+                jax.lax.stop_gradient(state.critic_params), obs, reparam_action
             )
-            return (self.cfg.alpha * reparam_log_prob - reparam_q).mean()
+            return self.cfg.alpha * reparam_log_prob - reparam_q
 
-        actor_loss, actor_grads = jax.value_and_grad(compute_actor_loss)(
-            state.actor_params
-        )
+        actor_losses, actor_grads = jax.vmap(
+            jax.value_and_grad(compute_actor_loss), in_axes=(None, 0, 0)
+        )(state.actor_params, state.obs, action_keys)
+        actor_ascent = jax.tree.map(jnp.negative, actor_grads)
+        actor_td_error = jnp.ones((self.cfg.num_envs,), dtype=jnp.float32)
         actor_updates, actor_optimizer_state = self.actor_optimizer.update(
-            actor_grads, state.actor_optimizer_state, state.actor_params
+            state.actor_optimizer_state, actor_grads, actor_ascent, actor_td_error
         )
-        actor_params = optax.apply_updates(state.actor_params, actor_updates)
+        actor_params = jax.tree.map(
+            lambda p, u: p + u, state.actor_params, actor_updates
+        )
 
         def compute_q_value(params: PyTree, obs: Array, action: Array) -> Array:
             return self.critic_network.apply(params, obs, action)
@@ -164,30 +174,23 @@ class AVG:
         )
 
         trace_decay = self.cfg.gamma * self.cfg.trace_lambda
-        reset_trace = jnp.broadcast_to(state.done, done.shape)
-
-        def accumulate(trace, gradient):
-            keep = trace_decay * (1.0 - reset_trace.astype(jnp.float32))
-            return jax.tree.map(
-                lambda t, g: broadcast(keep, t) * t + g, trace, gradient
-            )
-
-        critic_trace = accumulate(state.critic_trace, q_grads)
-
-        def synthetic_grad(trace_leaf):
-            return -(broadcast(td_error, trace_leaf) * trace_leaf).mean(axis=0)
-
-        critic_grads = jax.tree.map(synthetic_grad, critic_trace)
-        critic_updates, critic_optimizer_state = self.critic_optimizer.update(
-            critic_grads, state.critic_optimizer_state, state.critic_params
+        keep = trace_decay * (1.0 - state.done.astype(jnp.float32))
+        critic_trace = jax.tree.map(
+            lambda t, g: broadcast(keep, t) * t + g, state.critic_trace, q_grads
         )
-        critic_params = optax.apply_updates(state.critic_params, critic_updates)
+
+        critic_updates, critic_optimizer_state = self.critic_optimizer.update(
+            state.critic_optimizer_state, q_grads, critic_trace, td_error
+        )
+        critic_params = jax.tree.map(
+            lambda p, u: p + u, state.critic_params, critic_updates
+        )
 
         target = q + td_error
         explained_variance = 1 - jnp.var(td_error) / (jnp.var(target) + 1e-8)
         lox.log(
             {
-                "actor/loss": actor_loss,
+                "actor/loss": actor_losses.mean(),
                 "actor/log_prob": log_prob.mean(),
                 "critic/q": q.mean(),
                 "critic/target_v": target_v.mean(),
@@ -230,8 +233,12 @@ class AVG:
         actor_params = self.actor_network.init(actor_key, obs)
         critic_params = self.critic_network.init(critic_key, obs, action)
 
-        actor_optimizer_state = self.actor_optimizer.init(actor_params)
-        critic_optimizer_state = self.critic_optimizer.init(critic_params)
+        actor_optimizer_state = self.actor_optimizer.init(
+            actor_params, self.cfg.num_envs
+        )
+        critic_optimizer_state = self.critic_optimizer.init(
+            critic_params, self.cfg.num_envs
+        )
 
         critic_trace = jax.tree.map(
             lambda p: jnp.zeros((self.cfg.num_envs, *p.shape), dtype=p.dtype),

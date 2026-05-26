@@ -1,3 +1,5 @@
+import time
+
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -12,7 +14,9 @@ from strelax.environments.wrappers import (
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
 )
+from strelax.loggers import DashboardLogger, MultiLogger
 from strelax.networks import heads
+from strelax.optimizers import OptaxOptimizer
 
 total_timesteps = 5_000_000
 num_epochs = 100
@@ -78,8 +82,8 @@ config = AVGConfig(
 actor_network = Actor(action_dim=action_dim)
 critic_network = Critic()
 
-actor_optimizer = optax.adam(actor_lr, b1=beta1, b2=beta2, eps=eps)
-critic_optimizer = optax.adam(critic_lr, b1=beta1, b2=beta2, eps=eps)
+actor_optimizer = OptaxOptimizer(optax.adam(actor_lr, b1=beta1, b2=beta2, eps=eps))
+critic_optimizer = OptaxOptimizer(optax.adam(critic_lr, b1=beta1, b2=beta2, eps=eps))
 
 agent = AVG(
     config,
@@ -95,25 +99,51 @@ agent = AVG(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
+logger = MultiLogger(
+    [
+        DashboardLogger(
+            total_timesteps=total_timesteps,
+            summary={
+                "Algorithm": "AVG",
+                "Environment": env_id,
+                "Total Timesteps": f"{total_timesteps:_}",
+            },
+        ),
+    ]
+)
+
 key = jax.random.key(seed)
 key, init_key = jax.random.split(key)
 state = init(jax.random.split(init_key, num_seeds))
 
-train_keys = jax.random.split(key, num_epochs)
 for i in range(num_epochs):
-    state, logs = train(jax.random.split(train_keys[i], num_seeds), state, num_steps)
+    start = time.perf_counter()
+    key, train_key = jax.random.split(key)
+    state, logs = train(jax.random.split(train_key, num_seeds), state, num_steps)
+    jax.block_until_ready(state)
+    end = time.perf_counter()
 
-    returned_episode = logs.pop("returned_episode")
-    episode_statistics = {
-        "episode_returns": logs.pop("returned_episode_returns"),
-        "episode_lengths": logs.pop("returned_episode_lengths"),
-        "discounted_episode_returns": logs.pop("returned_discounted_episode_returns"),
+    SPS = int(num_steps / (end - start))
+
+    mask = logs.pop("returned_episode")
+    axes = tuple(range(1, mask.ndim))
+    episode_returns = jnp.mean(
+        logs.pop("returned_episode_returns"), axis=axes, where=mask
+    )
+    episode_lengths = jnp.mean(
+        logs.pop("returned_episode_lengths"), axis=axes, where=mask
+    )
+    discounted_episode_returns = jnp.mean(
+        logs.pop("returned_discounted_episode_returns"), axis=axes, where=mask
+    )
+
+    data = {
+        "training/SPS": SPS,
+        "training/episode_returns": episode_returns,
+        "training/episode_lengths": episode_lengths,
+        "training/discounted_episode_returns": discounted_episode_returns,
+        **logs,
     }
+    logger.log(data, step=state.step.mean(dtype=jnp.int32).item())
 
-    data = {}
-    if returned_episode.any():
-        data |= {
-            name: jnp.mean(value, where=returned_episode, axis=(1, 2))
-            for name, value in episode_statistics.items()
-        }
-    print(f"epoch {i + 1}/{num_epochs}: {data}")
+logger.finish()

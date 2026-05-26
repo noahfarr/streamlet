@@ -16,6 +16,8 @@ dependencies = [
     "distrax>=0.1.5",
     "gymnax>=0.0.9",
     "brax>=0.10.0",
+    "rich",
+    "wandb",
 ]
 
 [project.optional-dependencies]
