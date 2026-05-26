@@ -16,7 +16,7 @@ Most deep RL is built around large replay buffers and big batched updates. `Stre
 | | Details |
 |---|---|
 | 🤖 **Algorithms** | [Stream Q(λ)](https://arxiv.org/abs/2410.14606), [Stream AC(λ)](https://arxiv.org/abs/2410.14606), [Stream SARSA(λ)](https://arxiv.org/abs/2410.14606), [QRC](https://arxiv.org/abs/2507.09087), and [AVG](https://arxiv.org/abs/2411.15370) — all online, with eligibility traces and no replay buffer |
-| ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606), [`AdaptiveQ`](https://arxiv.org/abs/2605.06764), `IntentionalOptimizer`, and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
+| ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606), [`AdaptiveQ`](https://arxiv.org/abs/2605.06764), [`IntentionalOptimizer`](https://arxiv.org/abs/2604.19033), and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
 | 🎮 **Environments** | [Gymnax](https://github.com/RobertTLange/gymnax), [Brax](https://github.com/google/brax), [ALE](https://github.com/Farama-Foundation/Arcade-Learning-Environment), and [Gymnasium](https://github.com/Farama-Foundation/Gymnasium) behind a single `make("namespace::env_id")` entry point |
 | 🧰 **Wrappers** | Observation / reward normalization, episode-statistics recording, sticky actions |
 | 📊 **Logging** | In-graph structured logging via [`lox`](https://github.com/huterguier/lox) |
