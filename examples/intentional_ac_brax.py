@@ -75,6 +75,7 @@ actor_optimizer = IntentionalOptimizer(
         gamma=gamma,
         trace_lambda=trace_lambda,
         eta=0.05,
+        normalize_delta=True,
     ),
 )
 critic_optimizer = IntentionalOptimizer(

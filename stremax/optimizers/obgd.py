@@ -58,7 +58,7 @@ class ObGD:
             v_hat = jax.tree.map(lambda v: v / (1.0 - cfg.beta2**next_t_step), new_v)
             scaled_trace_leaves = jax.tree.leaves(
                 jax.tree.map(
-                    lambda t, vh: jnp.abs(t) / (jnp.sqrt(vh) + cfg.eps),
+                    lambda t, vh: jnp.abs(t) / jnp.sqrt(vh + cfg.eps),
                     trace,
                     v_hat,
                 )
@@ -85,7 +85,7 @@ class ObGD:
                     broadcast(step_size, trace_leaf)
                     * broadcast(td_error, trace_leaf)
                     * trace_leaf
-                    / (jnp.sqrt(v_hat_leaf) + cfg.eps)
+                    / jnp.sqrt(v_hat_leaf + cfg.eps)
                 ).mean(axis=0)
 
             updates = jax.tree.map(compute_update, trace, v_hat)

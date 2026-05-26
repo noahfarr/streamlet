@@ -39,7 +39,8 @@ config = QRCConfig(
     gamma=gamma,
     trace_lambda=trace_lambda,
     gradient_correction=True,
-    regularization_coefficient=0.0,
+    regularization_coefficient=1.0,
+    unroll=2,
 )
 
 sparse_init = sparse(sparsity=0.9)
@@ -68,8 +69,8 @@ h_network = nn.Sequential(
     ]
 )
 
-q_lr = 1e-3
-h_lr = 1e-3
+q_lr = 1e-4
+h_lr = 0.1 * q_lr
 q_optimizer = OptaxOptimizer(tx=optax.sgd(q_lr), name="q_optimizer")
 h_optimizer = OptaxOptimizer(tx=optax.sgd(h_lr), name="h_optimizer")
 

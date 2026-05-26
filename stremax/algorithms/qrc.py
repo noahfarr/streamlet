@@ -26,9 +26,9 @@ class QRCConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
-    gradient_correction: bool = True
-    regularization_coefficient: float = 0.0
-    unroll: int = struct.field(pytree_node=False, default=2)
+    gradient_correction: bool
+    regularization_coefficient: float
+    unroll: int = struct.field(pytree_node=False)
 
 
 @struct.dataclass(frozen=True)
