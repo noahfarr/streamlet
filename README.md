@@ -15,9 +15,8 @@ Most deep RL is built around large replay buffers and big batched updates. `Stre
 
 | | Details |
 |---|---|
-| 🤖 **Algorithms** | [Stream Q(λ)](https://arxiv.org/abs/2410.14606), [Stream AC(λ)](https://arxiv.org/abs/2410.14606), Stream SARSA(λ), [QRC](https://arxiv.org/abs/2007.00611) (Q-learning with regularized corrections), and [AVG](https://arxiv.org/abs/2411.15370) (action-value gradient for continuous control) — all online, with eligibility traces and no replay buffer |
-| ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606) (overshooting-bounded gradient descent), [`AdaptiveQ`](https://arxiv.org/abs/2605.06764) (Adam-style adaptive step sizes), `IntentionalOptimizer`, and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
-| 🧬 **Networks** | Flax heads for discrete and continuous Q-values, value functions, and categorical / Gaussian policies (state-dependent, state-independent, and squashed). [Sparse initialization](https://arxiv.org/abs/2410.14606). Composable `torso` → `head` pipeline |
+| 🤖 **Algorithms** | [Stream Q(λ)](https://arxiv.org/abs/2410.14606), [Stream AC(λ)](https://arxiv.org/abs/2410.14606), [Stream SARSA(λ)](https://arxiv.org/abs/2410.14606), [QRC](https://arxiv.org/abs/2507.09087), and [AVG](https://arxiv.org/abs/2411.15370) — all online, with eligibility traces and no replay buffer |
+| ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606), [`AdaptiveQ`](https://arxiv.org/abs/2605.06764), `IntentionalOptimizer`, and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
 | 🎮 **Environments** | [Gymnax](https://github.com/RobertTLange/gymnax), [Brax](https://github.com/google/brax), [ALE](https://github.com/Farama-Foundation/Arcade-Learning-Environment), and [Gymnasium](https://github.com/Farama-Foundation/Gymnasium) behind a single `make("namespace::env_id")` entry point |
 | 🧰 **Wrappers** | Observation / reward normalization, episode-statistics recording, sticky actions |
 | 📊 **Logging** | In-graph structured logging via [`lox`](https://github.com/huterguier/lox) |
@@ -77,29 +76,6 @@ state = agent.train(train_key, state, num_steps=100_000)
 
 Every algorithm exposes the same interface: `init` → `warmup` (optional) → `train` → `evaluate`. See `examples/` for complete scripts with logging and evaluation.
 
-<h2> 💡 Advanced Usage</h2>
-
-`Strelax` is built to scale experiments across seeds. Because every method is a pure function, you can `vmap` over seeds and use [`lox`](https://github.com/huterguier/lox) to collect metrics logged from *inside* the training scan — no Python-side bookkeeping:
-
-```python
-import jax
-import lox
-
-# agent built as above
-num_seeds = 8
-init = jax.vmap(agent.init)
-train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
-
-key = jax.random.key(0)
-key, init_key = jax.random.split(key)
-state = init(jax.random.split(init_key, num_seeds))
-
-state, logs = train(jax.random.split(key, num_seeds), state, 100_000)
-# logs is a pytree of per-step metrics (TD error, value, trace norm, ...), batched over seeds
-```
-
-Swapping in `StreamAC` with the `IntentionalOptimizer` on a Brax control task is a matter of changing the imports — see `examples/intentional_ac_brax.py`.
-
 <h2> 📂 Project Structure</h2>
 
 ```
@@ -131,4 +107,4 @@ If you use `Strelax` for your work, please cite:
 
 <h2> 🙏 Acknowledgments</h2>
 
-Streaming algorithms, ObGD, and sparse initialization follow [Elsayed et al., *Streaming Deep Reinforcement Learning Finally Works*](https://arxiv.org/abs/2410.14606). Special thanks to [@huterguier](https://github.com/huterguier) for [`lox`](https://github.com/huterguier/lox) and for discussions on the API design.
+Streaming algorithms, ObGD, and sparse initialization follow [Elsayed et al., *Streaming Deep Reinforcement Learning Finally Works*](https://arxiv.org/abs/2410.14606).
