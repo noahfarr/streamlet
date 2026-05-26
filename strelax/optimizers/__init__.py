@@ -1,3 +1,4 @@
+from .adaptive_q import AdaptiveQ, AdaptiveQConfig, AdaptiveQState
 from .intentional import (
     IntentionalOptimizer,
     IntentionalOptimizerConfig,
