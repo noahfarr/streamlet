@@ -11,41 +11,41 @@ from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
+    StickyActionWrapper,
 )
 from stremax.loggers import DashboardLogger, MultiLogger
-from stremax.networks import heads, sparse
-from stremax.optimizers import Intentional, IntentionalConfig
+from stremax.networks import Flatten, heads, sparse
+from stremax.optimizers import Implicit, ImplicitConfig, ObGD, ObGDConfig
 
 total_timesteps = 5_000_000
 num_epochs = 100
 num_steps = total_timesteps // num_epochs
 seed = 0
 num_seeds = 1
-env_id = "brax::halfcheetah"
-
-gamma = 0.99
-trace_lambda = 0.8
+env_id = "gymnax::Breakout-MinAtar"
 
 env, env_params = environment.make(env_id)
+env = StickyActionWrapper(env)
 env = RecordEpisodeStatistics(env)
 env = NormalizeObservationWrapper(env)
-env = NormalizeRewardWrapper(env, gamma=gamma)
+env = NormalizeRewardWrapper(env)
 
-action_dim = env.action_space(env_params).shape[0]
+num_actions = env.action_space(env_params).n
 
 config = StreamACConfig(
     num_envs=1,
-    trace_lambda=trace_lambda,
+    trace_lambda=0.8,
     entropy_coefficient=0.01,
-    gamma=gamma,
+    gamma=0.99,
 )
 
 sparse_init = sparse(sparsity=0.9)
 network = nn.Sequential(
     [
-        nn.Dense(128, kernel_init=sparse_init),
+        nn.Conv(16, (3, 3), strides=(1, 1), padding="VALID", kernel_init=sparse_init),
         nn.LayerNorm(),
         nn.leaky_relu,
+        Flatten(start_dim=-3),
         nn.Dense(128, kernel_init=sparse_init),
         nn.LayerNorm(),
         nn.leaky_relu,
@@ -55,11 +55,7 @@ network = nn.Sequential(
 actor_network = nn.Sequential(
     [
         network,
-        heads.StateDependentGaussian(
-            action_dim=action_dim,
-            transform=nn.softplus,
-            kernel_init=sparse_init,
-        ),
+        heads.Categorical(action_dim=num_actions, kernel_init=sparse_init),
     ]
 )
 
@@ -70,21 +66,16 @@ critic_network = nn.Sequential(
     ]
 )
 
-actor_optimizer = Intentional(
-    cfg=IntentionalConfig(
-        gamma=gamma,
-        trace_lambda=trace_lambda,
-        eta=0.05,
-        normalize_delta=True,
+actor_optimizer = ObGD(
+    cfg=ObGDConfig(
+        lr=1.0,
+        kappa=3.0,
+        beta2=0.999,
+        eps=1e-8,
+        adaptive=False,
     ),
 )
-critic_optimizer = Intentional(
-    cfg=IntentionalConfig(
-        gamma=gamma,
-        trace_lambda=trace_lambda,
-        eta=0.5,
-    ),
-)
+critic_optimizer = Implicit(cfg=ImplicitConfig(lr=0.1))
 
 agent = StreamAC(
     config,
@@ -105,7 +96,7 @@ logger = MultiLogger(
         DashboardLogger(
             total_timesteps=total_timesteps,
             summary={
-                "Algorithm": "intentional-AC",
+                "Algorithm": "implicit-AC",
                 "Environment": env_id,
                 "Total Timesteps": f"{total_timesteps:_}",
             },

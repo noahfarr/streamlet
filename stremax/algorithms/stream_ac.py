@@ -9,7 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
-from stremax.optimizers import Optimizer
+from stremax.optimizers import Implicit, Optimizer
 from stremax.utils import Timestep, Transition, broadcast
 from stremax.utils.typing import (
     Array,
@@ -174,9 +174,43 @@ class StreamAC:
         actor_updates, actor_optimizer_state = self.actor_optimizer.update(
             state.actor_optimizer_state, actor_grads, actor_trace, td_error,
         )
-        critic_updates, critic_optimizer_state = self.critic_optimizer.update(
-            state.critic_optimizer_state, critic_grads, critic_trace, td_error,
-        )
+
+        if isinstance(self.critic_optimizer, Implicit):
+            gradient_trace = sum(
+                jnp.sum(g * z, axis=tuple(range(1, g.ndim)))
+                for g, z in zip(
+                    jax.tree.leaves(critic_grads), jax.tree.leaves(critic_trace)
+                )
+            )
+
+            def bootstrap_value(params, obs):
+                return self.critic_network.apply(params, obs).squeeze(-1)
+
+            def directional(obs, direction):
+                _, jvp_value = jax.jvp(
+                    lambda params: bootstrap_value(params, obs),
+                    (state.critic_params,),
+                    (direction,),
+                )
+                return jvp_value
+
+            next_grad_trace = jax.vmap(directional)(
+                transition.second.obs, critic_trace
+            )
+            curvature = gradient_trace - self.cfg.gamma * (
+                1.0 - transition.second.done.astype(jnp.float32)
+            ) * next_grad_trace
+            critic_updates, critic_optimizer_state = self.critic_optimizer.update(
+                state.critic_optimizer_state,
+                critic_grads,
+                critic_trace,
+                td_error,
+                curvature,
+            )
+        else:
+            critic_updates, critic_optimizer_state = self.critic_optimizer.update(
+                state.critic_optimizer_state, critic_grads, critic_trace, td_error,
+            )
 
         actor_params = jax.tree.map(
             lambda p, u: p + u,

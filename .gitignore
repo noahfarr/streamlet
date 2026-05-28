@@ -212,3 +212,7 @@ wandb/
 multirun/
 logs/
 .DS_Store
+
+# Data and output files
+*.pdf
+*.csv

@@ -1,10 +1,11 @@
-from stremax.environments import ale, brax, gymnasium, gymnax
+from stremax.environments import ale, brax, ett, gymnasium, gymnax
 
 register = {
     "gymnax": gymnax.make,
     "brax": brax.make,
     "gymnasium": gymnasium.make,
     "ale": ale.make,
+    "ett": ett.make,
 }
 
 

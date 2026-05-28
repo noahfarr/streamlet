@@ -11,7 +11,7 @@ from stremax.utils import broadcast
 
 
 @struct.dataclass(frozen=True)
-class IntentionalOptimizerConfig:
+class IntentionalConfig:
     gamma: float
     trace_lambda: float
     eta: float = 0.5
@@ -27,7 +27,7 @@ class IntentionalOptimizerConfig:
 
 
 @struct.dataclass(frozen=True)
-class IntentionalOptimizerState:
+class IntentionalState:
     second_moment: PyTree
     sigma: Array
     squared_delta_ema: Array
@@ -38,17 +38,17 @@ class IntentionalOptimizerState:
 
 
 @dataclass
-class IntentionalOptimizer:
-    cfg: IntentionalOptimizerConfig
+class Intentional:
+    cfg: IntentionalConfig
     name: str = "optimizer"
 
-    def init(self, parameters: PyTree, num_envs: int) -> IntentionalOptimizerState:
+    def init(self, parameters: PyTree, num_envs: int) -> IntentionalState:
         second_moment = jax.tree.map(
             lambda p: jnp.zeros((num_envs, *p.shape), dtype=jnp.float32),
             parameters,
         )
         zeros = jnp.zeros((num_envs,), dtype=jnp.float32)
-        return IntentionalOptimizerState(
+        return IntentionalState(
             second_moment=second_moment,
             sigma=zeros,
             squared_delta_ema=jnp.ones((num_envs,), dtype=jnp.float32),
@@ -60,11 +60,11 @@ class IntentionalOptimizer:
 
     def update(
         self,
-        state: IntentionalOptimizerState,
+        state: IntentionalState,
         gradient: PyTree,
         trace: PyTree,
         td_error: Array,
-    ) -> tuple[PyTree, IntentionalOptimizerState]:
+    ) -> tuple[PyTree, IntentionalState]:
         cfg = self.cfg
         next_step = state.step + 1
 
@@ -143,7 +143,7 @@ class IntentionalOptimizer:
             preconditioner,
         )
 
-        new_state = IntentionalOptimizerState(
+        new_state = IntentionalState(
             second_moment=new_second_moment,
             sigma=new_sigma,
             squared_delta_ema=new_squared_delta_ema,

@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 gymnasium = ["gymnasium"]
 ale       = ["ale-py[gymnasium]"]
+examples  = ["matplotlib"]
 
 
 [tool.uv.sources]

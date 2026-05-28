@@ -14,7 +14,7 @@ from stremax.environments.wrappers import (
 )
 from stremax.loggers import DashboardLogger, MultiLogger
 from stremax.networks import Flatten, heads, sparse
-from stremax.optimizers import IntentionalOptimizer, IntentionalOptimizerConfig
+from stremax.optimizers import Intentional, IntentionalConfig
 
 total_timesteps = 5_000_000
 num_epochs = 100
@@ -59,8 +59,8 @@ q_network = nn.Sequential(
     ]
 )
 
-q_optimizer = IntentionalOptimizer(
-    cfg=IntentionalOptimizerConfig(
+q_optimizer = Intentional(
+    cfg=IntentionalConfig(
         gamma=gamma,
         trace_lambda=trace_lambda,
         eta=0.25,

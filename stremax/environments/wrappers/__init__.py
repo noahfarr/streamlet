@@ -5,6 +5,10 @@ from .normalize_observation import (
     NormalizeObservationWrapperState,
 )
 from .normalize_reward import NormalizeRewardWrapper, NormalizeRewardWrapperState
+from .observation_traces import (
+    ObservationTracesWrapper,
+    ObservationTracesWrapperState,
+)
 from .record_episode_statistics import (
     RecordEpisodeStatistics,
     RecordEpisodeStatisticsState,

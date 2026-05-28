@@ -9,7 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
-from stremax.optimizers import Optimizer
+from stremax.optimizers import Implicit, Optimizer
 from stremax.utils import Timestep, Transition, broadcast
 from stremax.utils.typing import (
     Array,
@@ -165,9 +165,34 @@ class StreamQ:
             lambda t, g: broadcast(discount, t) * t + g, state.q_trace, q_grads
         )
 
-        q_updates, q_optimizer_state = self.q_optimizer.update(
-            state.q_optimizer_state, q_grads, q_trace, td_error,
-        )
+        if isinstance(self.q_optimizer, Implicit):
+            gradient_trace = sum(
+                jnp.sum(g * z, axis=tuple(range(1, g.ndim)))
+                for g, z in zip(jax.tree.leaves(q_grads), jax.tree.leaves(q_trace))
+            )
+
+            def bootstrap_value(params, obs):
+                return self.q_network.apply(params, obs).max(axis=-1)
+
+            def directional(obs, direction):
+                _, jvp_value = jax.jvp(
+                    lambda params: bootstrap_value(params, obs),
+                    (state.q_params,),
+                    (direction,),
+                )
+                return jvp_value
+
+            next_grad_trace = jax.vmap(directional)(transition.second.obs, q_trace)
+            curvature = gradient_trace - self.cfg.gamma * (
+                1.0 - transition.second.done.astype(jnp.float32)
+            ) * next_grad_trace
+            q_updates, q_optimizer_state = self.q_optimizer.update(
+                state.q_optimizer_state, q_grads, q_trace, td_error, curvature,
+            )
+        else:
+            q_updates, q_optimizer_state = self.q_optimizer.update(
+                state.q_optimizer_state, q_grads, q_trace, td_error,
+            )
 
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
