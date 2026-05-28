@@ -14,7 +14,7 @@ from stremax.environments.wrappers import (
     RecordEpisodeStatistics,
 )
 from stremax.networks import heads, sparse
-from stremax.optimizers import ObGD, ObGDConfig
+from stremax.optimizers import Implicit, ImplicitConfig
 
 total_steps = 68_000
 seed = 0
@@ -24,7 +24,6 @@ env_id = "ett::ETTm2"
 gamma = 0.99
 trace_lambda = 0.8
 lr = 1.0
-kappa = 2.0
 beta = 0.999
 
 env, env_params = environment.make(env_id)
@@ -54,7 +53,7 @@ value_network = nn.Sequential(
     ]
 )
 
-value_optimizer = ObGD(cfg=ObGDConfig(lr=lr, kappa=kappa))
+value_optimizer = Implicit(cfg=ImplicitConfig(lr=lr))
 
 agent = StreamTD(
     config,
