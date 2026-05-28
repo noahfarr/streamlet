@@ -1,3 +1,5 @@
+import argparse
+import dataclasses
 import time
 
 import flax.linen as nn
@@ -13,15 +15,21 @@ from stremax.environments.wrappers import (
     RecordEpisodeStatistics,
     StickyActionWrapper,
 )
-from stremax.loggers import DashboardLogger, MultiLogger
+from stremax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from stremax.networks import Flatten, heads, sparse
 from stremax.optimizers import Implicit, ImplicitConfig
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--wandb", action="store_true", help="Enable Weights & Biases logging."
+)
+args = parser.parse_args()
 
 total_timesteps = 5_000_000
 num_epochs = 100
 num_steps = total_timesteps // num_epochs
 seed = 0
-num_seeds = 1
+num_seeds = 5
 env_id = "gymnax::Breakout-MinAtar"
 
 env, env_params = environment.make(env_id)
@@ -58,7 +66,7 @@ q_network = nn.Sequential(
     ]
 )
 
-q_optimizer = Implicit(cfg=ImplicitConfig(lr=1.0))
+q_optimizer = Implicit(cfg=ImplicitConfig(lr=0.001))
 
 epsilon_start = 1.0
 epsilon_end = 0.01
@@ -84,18 +92,41 @@ agent = StreamQ(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-logger = MultiLogger(
-    [
-        DashboardLogger(
-            total_timesteps=total_timesteps,
-            summary={
-                "Algorithm": "implicit-Q",
-                "Environment": env_id,
-                "Total Timesteps": f"{total_timesteps:_}",
+group = f"implicit-Q__{env_id}__implicit"
+
+loggers = [
+    DashboardLogger(
+        total_timesteps=total_timesteps,
+        summary={
+            "Algorithm": "implicit-Q",
+            "Environment": env_id,
+            "Total Timesteps": f"{total_timesteps:_}",
+        },
+    ),
+]
+if args.wandb:
+    loggers.append(
+        WandbLogger(
+            project="stremax",
+            name="implicit-Q",
+            mode="online",
+            group=group,
+            cfg={
+                "algorithm": "implicit-Q",
+                "env_id": env_id,
+                "total_timesteps": total_timesteps,
+                **dataclasses.asdict(config),
+                "optimizer": q_optimizer.name,
+                **{
+                    f"optimizer/{k}": v
+                    for k, v in dataclasses.asdict(q_optimizer.cfg).items()
+                },
             },
-        ),
-    ]
-)
+            seed=seed,
+            num_seeds=num_seeds,
+        )
+    )
+logger = MultiLogger(loggers)
 
 key = jax.random.key(seed)
 key, init_key = jax.random.split(key)

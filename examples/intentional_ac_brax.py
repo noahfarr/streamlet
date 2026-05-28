@@ -1,3 +1,5 @@
+import argparse
+import dataclasses
 import time
 
 import flax.linen as nn
@@ -12,15 +14,19 @@ from stremax.environments.wrappers import (
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
 )
-from stremax.loggers import DashboardLogger, MultiLogger
+from stremax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from stremax.networks import heads, sparse
 from stremax.optimizers import Intentional, IntentionalConfig
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+args = parser.parse_args()
 
 total_timesteps = 5_000_000
 num_epochs = 100
 num_steps = total_timesteps // num_epochs
 seed = 0
-num_seeds = 1
+num_seeds = 5
 env_id = "brax::halfcheetah"
 
 gamma = 0.99
@@ -100,18 +106,46 @@ agent = StreamAC(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-logger = MultiLogger(
-    [
-        DashboardLogger(
-            total_timesteps=total_timesteps,
-            summary={
-                "Algorithm": "intentional-AC",
-                "Environment": env_id,
-                "Total Timesteps": f"{total_timesteps:_}",
+group = f"intentional-AC__{env_id}__intentional"
+
+loggers = [
+    DashboardLogger(
+        total_timesteps=total_timesteps,
+        summary={
+            "Algorithm": "intentional-AC",
+            "Environment": env_id,
+            "Total Timesteps": f"{total_timesteps:_}",
+        },
+    ),
+]
+if args.wandb:
+    loggers.append(
+        WandbLogger(
+            project="stremax",
+            name="intentional-AC",
+            mode="online",
+            group=group,
+            cfg={
+                "algorithm": "intentional-AC",
+                "env_id": env_id,
+                "total_timesteps": total_timesteps,
+                **dataclasses.asdict(config),
+                "actor_optimizer": actor_optimizer.name,
+                **{
+                    f"actor_optimizer/{k}": v
+                    for k, v in dataclasses.asdict(actor_optimizer.cfg).items()
+                },
+                "critic_optimizer": critic_optimizer.name,
+                **{
+                    f"critic_optimizer/{k}": v
+                    for k, v in dataclasses.asdict(critic_optimizer.cfg).items()
+                },
             },
-        ),
-    ]
-)
+            seed=seed,
+            num_seeds=num_seeds,
+        )
+    )
+logger = MultiLogger(loggers)
 
 key = jax.random.key(seed)
 key, init_key = jax.random.split(key)

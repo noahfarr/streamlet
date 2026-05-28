@@ -1,3 +1,5 @@
+import argparse
+import dataclasses
 import time
 
 import flax.linen as nn
@@ -13,15 +15,19 @@ from stremax.environments.wrappers import (
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
 )
-from stremax.loggers import DashboardLogger, MultiLogger
+from stremax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from stremax.networks import Flatten, heads, sparse
 from stremax.optimizers import OptaxOptimizer
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+args = parser.parse_args()
 
 total_timesteps = 5_000_000
 num_epochs = 100
 num_steps = total_timesteps // num_epochs
 seed = 0
-num_seeds = 1
+num_seeds = 5
 env_id = "gymnax::Breakout-MinAtar"
 
 gamma = 0.99
@@ -96,18 +102,40 @@ agent = QRC(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-logger = MultiLogger(
-    [
-        DashboardLogger(
-            total_timesteps=total_timesteps,
-            summary={
-                "Algorithm": "QRC",
-                "Environment": env_id,
-                "Total Timesteps": f"{total_timesteps:_}",
+group = f"QRC__{env_id}__sgd"
+
+loggers = [
+    DashboardLogger(
+        total_timesteps=total_timesteps,
+        summary={
+            "Algorithm": "QRC",
+            "Environment": env_id,
+            "Total Timesteps": f"{total_timesteps:_}",
+        },
+    ),
+]
+if args.wandb:
+    loggers.append(
+        WandbLogger(
+            project="stremax",
+            name="QRC",
+            mode="online",
+            group=group,
+            cfg={
+                "algorithm": "QRC",
+                "env_id": env_id,
+                "total_timesteps": total_timesteps,
+                **dataclasses.asdict(config),
+                "q_optimizer": q_optimizer.name,
+                "h_optimizer": h_optimizer.name,
+                "q_lr": q_lr,
+                "h_lr": h_lr,
             },
-        ),
-    ]
-)
+            seed=seed,
+            num_seeds=num_seeds,
+        )
+    )
+logger = MultiLogger(loggers)
 
 key = jax.random.key(seed)
 key, init_key = jax.random.split(key)

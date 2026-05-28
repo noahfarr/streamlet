@@ -1,3 +1,5 @@
+import argparse
+import dataclasses
 import time
 
 import flax.linen as nn
@@ -14,15 +16,19 @@ from stremax.environments.wrappers import (
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
 )
-from stremax.loggers import DashboardLogger, MultiLogger
+from stremax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from stremax.networks import heads
 from stremax.optimizers import OptaxOptimizer
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+args = parser.parse_args()
 
 total_timesteps = 5_000_000
 num_epochs = 100
 num_steps = total_timesteps // num_epochs
 seed = 0
-num_seeds = 1
+num_seeds = 5
 env_id = "brax::halfcheetah"
 
 gamma = 0.99
@@ -99,18 +105,44 @@ agent = AVG(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-logger = MultiLogger(
-    [
-        DashboardLogger(
-            total_timesteps=total_timesteps,
-            summary={
-                "Algorithm": "AVG",
-                "Environment": env_id,
-                "Total Timesteps": f"{total_timesteps:_}",
+group = f"AVG__{env_id}__adam"
+
+loggers = [
+    DashboardLogger(
+        total_timesteps=total_timesteps,
+        summary={
+            "Algorithm": "AVG",
+            "Environment": env_id,
+            "Total Timesteps": f"{total_timesteps:_}",
+        },
+    ),
+]
+if args.wandb:
+    loggers.append(
+        WandbLogger(
+            project="stremax",
+            name="AVG",
+            mode="online",
+            group=group,
+            cfg={
+                "algorithm": "AVG",
+                "env_id": env_id,
+                "total_timesteps": total_timesteps,
+                **dataclasses.asdict(config),
+                "actor_optimizer": "adam",
+                "critic_optimizer": "adam",
+                "actor_lr": actor_lr,
+                "critic_lr": critic_lr,
+                "beta1": beta1,
+                "beta2": beta2,
+                "eps": eps,
+                "n_hid": n_hid,
             },
-        ),
-    ]
-)
+            seed=seed,
+            num_seeds=num_seeds,
+        )
+    )
+logger = MultiLogger(loggers)
 
 key = jax.random.key(seed)
 key, init_key = jax.random.split(key)
