@@ -15,14 +15,10 @@ Most deep RL is built around large replay buffers and big batched updates. `Stre
 
 | | Details |
 |---|---|
-| 🤖 **Algorithms** | [Stream Q(λ)](https://arxiv.org/abs/2410.14606), [Stream AC(λ)](https://arxiv.org/abs/2410.14606), [Stream SARSA(λ)](https://arxiv.org/abs/2410.14606), [QRC](https://arxiv.org/abs/2507.09087), and [AVG](https://arxiv.org/abs/2411.15370) — all online, with eligibility traces and no replay buffer |
-<<<<<<< Updated upstream
-| ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606), [`AdaptiveQ`](https://arxiv.org/abs/2605.06764), [`IntentionalOptimizer`](https://arxiv.org/abs/2604.19033), and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
-=======
-| ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606), [`AdaptiveQ`](https://arxiv.org/abs/2605.06764), [`Implicit`](https://arxiv.org/abs/2505.01361), `Intentional`, and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
->>>>>>> Stashed changes
-| 🎮 **Environments** | [Gymnax](https://github.com/RobertTLange/gymnax), [Brax](https://github.com/google/brax), [ALE](https://github.com/Farama-Foundation/Arcade-Learning-Environment), and [Gymnasium](https://github.com/Farama-Foundation/Gymnasium) behind a single `make("namespace::env_id")` entry point |
-| 🧰 **Wrappers** | Observation / reward normalization, episode-statistics recording, sticky actions |
+| 🤖 **Algorithms** | [Stream Q(λ)](https://arxiv.org/abs/2410.14606), [Stream AC(λ)](https://arxiv.org/abs/2410.14606), [Stream SARSA(λ)](https://arxiv.org/abs/2410.14606), [Stream TD(λ)](https://arxiv.org/abs/2410.14606), [QRC](https://arxiv.org/abs/2507.09087), and [AVG](https://arxiv.org/abs/2411.15370) — all online, with eligibility traces and no replay buffer |
+| ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606), [`AdaptiveQ`](https://arxiv.org/abs/2605.06764), [`Implicit`](https://arxiv.org/abs/2505.01361), [`Intentional`](https://arxiv.org/abs/2604.19033), and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
+| 🎮 **Environments** | [Gymnax](https://github.com/RobertTLange/gymnax), [Brax](https://github.com/google/brax), [ALE](https://github.com/Farama-Foundation/Arcade-Learning-Environment), [Gymnasium](https://github.com/Farama-Foundation/Gymnasium), and the built-in [ETT](https://github.com/zhouhaoyi/ETDataset) time-series prediction dataset behind a single `make("namespace::env_id")` entry point |
+| 🧰 **Wrappers** | Observation / reward normalization, observation traces, episode-statistics recording, sticky actions |
 | 📊 **Logging** | In-graph structured logging via [`lox`](https://github.com/huterguier/lox) |
 
 <h2> 📥 Installation</h2>
@@ -84,11 +80,11 @@ Every algorithm exposes the same interface: `init` → `warmup` (optional) → `
 
 ```
 stremax/
-├─ examples/          # Runnable scripts (Stream Q / SARSA / AC, QRC, AVG on MinAtar & Brax)
+├─ examples/          # Runnable scripts (Stream Q / SARSA / AC / TD, QRC, AVG on MinAtar, Brax & ETT)
 ├─ stremax/
-   ├─ algorithms/     # StreamQ, StreamSARSA, StreamAC, QRC, AVG
+   ├─ algorithms/     # StreamQ, StreamSARSA, StreamAC, StreamTD, QRC, AVG
    ├─ optimizers/     # ObGD, AdaptiveQ, Implicit, Intentional, optax wrapper
-   ├─ environments/   # Gymnax / Brax / ALE / Gymnasium adapters + wrappers
+   ├─ environments/   # Gymnax / Brax / ALE / Gymnasium / ETT adapters + wrappers
    ├─ networks/       # heads, layers, initializers
    └─ utils/          # Timestep, Transition, TD-error scaler, helpers
 ```
