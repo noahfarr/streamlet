@@ -76,11 +76,43 @@ state = agent.train(train_key, state, num_steps=100_000)
 
 Every algorithm exposes the same interface: `init` → `warmup` (optional) → `train` → `evaluate`. See `examples/` for complete scripts with logging and evaluation.
 
+<h2> 🖥️ Launching on a cluster</h2>
+
+`scripts/launch.py` submits an example script to SLURM as an array job (one task per env-id, and per `--eta` for examples that take it) via [`slurmpilot`](https://github.com/geoalgo/slurmpilot). You run it from your laptop; slurmpilot ships the repo to the cluster over SSH and calls `sbatch` there. The upload is filtered by this repo's `.gitignore`, so `.venv/` and `wandb/` are not copied.
+
+Install the launch tooling (pulled from the fork that adds `.gitignore`-aware uploads), then point slurmpilot at your cluster:
+
+```bash
+uv sync --extra cluster
+
+mkdir -p ~/slurmpilot/config/clusters
+cp scripts/slurmpilot/general.yaml      ~/slurmpilot/config/general.yaml
+cp scripts/slurmpilot/clusters/ias.yaml ~/slurmpilot/config/clusters/ias.yaml
+# edit ~/slurmpilot/config/clusters/ias.yaml and set `host:` (and `user:`)
+```
+
+Then launch (use `--dry-run` first to print the sweep and inspect the generated `slurm_script.sh` without submitting):
+
+```bash
+# Measured eta sweep across the 4 MinAtar envs on CPU, with wandb (the old launch.sh default)
+uv run python scripts/launch.py
+
+# A different example on GPU, no eta sweep, no wandb
+uv run python scripts/launch.py --example stream_q_minatar --device gpu --no-wandb
+
+# MinAtar Q-learning across ALL optimizers (ObGD, Measured, Implicit, Intentional, AdaptiveQ),
+# one array job per optimizer
+uv run python scripts/minatar.py
+```
+
+Each node runs `uv sync --frozen` against the shipped `uv.lock` before training. If your compute nodes have no internet, override the setup step to use a pre-built environment, e.g. `--setup 'source ~/stremax-env/bin/activate'`.
+
 <h2> 📂 Project Structure</h2>
 
 ```
 stremax/
 ├─ examples/          # Runnable scripts (Stream Q / SARSA / AC / TD, QRC, AVG on MinAtar, Brax & ETT)
+├─ scripts/           # slurmpilot launchers (launch.py, minatar.py) + cluster config templates
 ├─ stremax/
    ├─ algorithms/     # StreamQ, StreamSARSA, StreamAC, StreamTD, QRC, AVG
    ├─ optimizers/     # ObGD, AdaptiveQ, Implicit, Intentional, optax wrapper

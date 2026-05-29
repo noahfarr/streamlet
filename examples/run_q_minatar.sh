@@ -13,7 +13,7 @@ envs=(
 
 implicit_lrs=(0.001)
 
-for example in vogd_q_minatar; do
+for example in measured_q_minatar; do
     for env_id in "${envs[@]}"; do
         echo "=== Running ${example} on ${env_id} ==="
         uv run python "examples/${example}.py" --env-id "${env_id}" --wandb

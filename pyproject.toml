@@ -24,7 +24,11 @@ dependencies = [
 gymnasium = ["gymnasium"]
 ale       = ["ale-py[gymnasium]"]
 examples  = ["matplotlib"]
+# Launch-only tooling (cluster/launch.py); not needed to run the examples.
+# Uses the fork branch that adds .gitignore-aware upload filtering.
+cluster   = ["slurmpilot"]
 
 
 [tool.uv.sources]
 lox = { git = "https://github.com/huterguier/lox" }
+slurmpilot = { git = "ssh://git@github.com/noahfarr/slurmpilot.git", branch = "feat/spignore" }

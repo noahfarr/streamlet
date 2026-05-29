@@ -16,7 +16,7 @@ from stremax.environments.wrappers import (
 )
 from stremax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from stremax.networks import Flatten, heads, sparse
-from stremax.optimizers import VOGD, VOGDConfig
+from stremax.optimizers import Measured, MeasuredConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -37,7 +37,7 @@ parser.add_argument(
     "--eta",
     type=float,
     default=0.5,
-    help="VOGD step-size scale (no base learning rate; eta multiplies the variance-optimal step).",
+    help="Measured step-size scale (no base learning rate; eta multiplies the variance-optimal step).",
 )
 args = parser.parse_args()
 
@@ -84,7 +84,7 @@ q_network = nn.Sequential(
     ]
 )
 
-q_optimizer = VOGD(cfg=VOGDConfig(eta=args.eta))
+q_optimizer = Measured(cfg=MeasuredConfig(eta=args.eta))
 
 epsilon_start = 1.0
 epsilon_end = 0.01
@@ -110,7 +110,7 @@ agent = StreamQ(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"stream-Q__{env_id}__vogd__eta{args.eta}"
+group = f"stream-Q__{env_id}__measured__eta{args.eta}"
 
 loggers = [
     DashboardLogger(

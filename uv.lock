@@ -312,6 +312,15 @@ wheels = [
 ]
 
 [[package]]
+name = "coolname"
+version = "5.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fe/45/deae12f31934301a488df985880240a200119aca2e4b5ceba71d73bc5e86/coolname-5.0.0.tar.gz", hash = "sha256:594bc6c98ebc75ddd51c0ce10efbb5d2556c14eac60b5b36900dfdd5db20eecf", size = 45800, upload-time = "2026-04-23T06:04:50.824Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/97/35/cf824e535233c432048bd7455b28808776471ab5861375772b2c98ea4cbd/coolname-5.0.0-py3-none-any.whl", hash = "sha256:b86eea9670aa0620965167d1bfadfe654fabec839a5b51e8da611c4a64f86192", size = 47368, upload-time = "2026-04-23T06:04:49.374Z" },
+]
+
+[[package]]
 name = "cycler"
 version = "0.12.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1447,6 +1456,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pathspec"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
+]
+
+[[package]]
 name = "pillow"
 version = "12.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1921,6 +1939,16 @@ wheels = [
 ]
 
 [[package]]
+name = "slurmpilot"
+version = "0.2.0"
+source = { git = "ssh://git@github.com/noahfarr/slurmpilot.git?branch=feat%2Fspignore#a068a50ad330e9d1d5509bd1643291a593855f3e" }
+dependencies = [
+    { name = "coolname" },
+    { name = "pathspec" },
+    { name = "pyyaml" },
+]
+
+[[package]]
 name = "smmap"
 version = "5.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1949,6 +1977,9 @@ dependencies = [
 ale = [
     { name = "ale-py" },
 ]
+cluster = [
+    { name = "slurmpilot" },
+]
 examples = [
     { name = "matplotlib" },
 ]
@@ -1969,9 +2000,10 @@ requires-dist = [
     { name = "lox", git = "https://github.com/huterguier/lox" },
     { name = "matplotlib", marker = "extra == 'examples'" },
     { name = "rich" },
+    { name = "slurmpilot", marker = "extra == 'cluster'", git = "ssh://git@github.com/noahfarr/slurmpilot.git?branch=feat%2Fspignore" },
     { name = "wandb" },
 ]
-provides-extras = ["gymnasium", "ale", "examples"]
+provides-extras = ["gymnasium", "ale", "examples", "cluster"]
 
 [[package]]
 name = "tensorboardx"
