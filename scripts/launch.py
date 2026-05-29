@@ -22,7 +22,11 @@ DEVICE_PRESETS = {
         n_gpus=0,
         mem=8000,
         max_runtime_minutes=6 * 60,
-        env={"JAX_PLATFORMS": "cpu", "PYTHONUNBUFFERED": "1"},
+        env={
+            "JAX_PLATFORMS": "cpu",
+            "PYTHONUNBUFFERED": "1",
+            "VIRTUAL_ENV": "~/stremax/.venv",
+        },
     ),
     "gpu": dict(
         n_cpus=4,
@@ -34,6 +38,7 @@ DEVICE_PRESETS = {
             "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
             "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
             "PYTHONUNBUFFERED": "1",
+            "VIRTUAL_ENV": "~/stremax/.venv",
         },
     ),
 }
@@ -41,7 +46,7 @@ DEVICE_PRESETS = {
 DEFAULT_SETUP = (
     f'export PATH="$HOME/.local/bin:$PATH"'
 )
-PYTHON_BINARY = f"uv run --no-sync --project {SRC_NAME} python"
+PYTHON_BINARY = "uv run --no-sync python"
 
 
 def build_sweep(
