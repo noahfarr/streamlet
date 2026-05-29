@@ -20,6 +20,24 @@ from stremax.optimizers import Intentional, IntentionalConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+parser.add_argument(
+    "--env-id",
+    default="brax::halfcheetah",
+    choices=[
+        "brax::ant",
+        "brax::halfcheetah",
+        "brax::hopper",
+        "brax::humanoid",
+        "brax::humanoidstandup",
+        "brax::inverted_double_pendulum",
+        "brax::inverted_pendulum",
+        "brax::pusher",
+        "brax::reacher",
+        "brax::swimmer",
+        "brax::walker2d",
+    ],
+    help="Brax environment to train on.",
+)
 args = parser.parse_args()
 
 total_timesteps = 5_000_000
@@ -27,7 +45,7 @@ num_epochs = 100
 num_steps = total_timesteps // num_epochs
 seed = 0
 num_seeds = 5
-env_id = "brax::halfcheetah"
+env_id = args.env_id
 
 gamma = 0.99
 trace_lambda = 0.8

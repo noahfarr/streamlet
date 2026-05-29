@@ -9,7 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
-from stremax.optimizers import Implicit, Optimizer
+from stremax.optimizers import VOGD, Implicit, Optimizer
 from stremax.utils import Timestep, Transition, broadcast
 from stremax.utils.typing import (
     Array,
@@ -165,7 +165,7 @@ class StreamQ:
             lambda t, g: broadcast(discount, t) * t + g, state.q_trace, q_grads
         )
 
-        if isinstance(self.q_optimizer, Implicit):
+        if isinstance(self.q_optimizer, (Implicit, VOGD)):
             gradient_trace = sum(
                 jnp.sum(g * z, axis=tuple(range(1, g.ndim)))
                 for g, z in zip(jax.tree.leaves(q_grads), jax.tree.leaves(q_trace))

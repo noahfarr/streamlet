@@ -23,6 +23,17 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     "--wandb", action="store_true", help="Enable Weights & Biases logging."
 )
+parser.add_argument(
+    "--env-id",
+    default="gymnax::Breakout-MinAtar",
+    choices=[
+        "gymnax::Asterix-MinAtar",
+        "gymnax::Breakout-MinAtar",
+        "gymnax::Freeway-MinAtar",
+        "gymnax::SpaceInvaders-MinAtar",
+    ],
+    help="MinAtar environment to train on.",
+)
 args = parser.parse_args()
 
 total_timesteps = 5_000_000
@@ -30,7 +41,7 @@ num_epochs = 100
 num_steps = total_timesteps // num_epochs
 seed = 0
 num_seeds = 5
-env_id = "gymnax::Breakout-MinAtar"
+env_id = args.env_id
 
 env, env_params = environment.make(env_id)
 env = StickyActionWrapper(env)
@@ -68,7 +79,7 @@ q_network = nn.Sequential(
 
 q_optimizer = ObGD(
     cfg=ObGDConfig(
-        lr=0.001,
+        lr=1.0,
         kappa=2.0,
         beta2=0.999,
         eps=1e-8,

@@ -9,7 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
-from stremax.optimizers import Implicit, Optimizer
+from stremax.optimizers import VOGD, Implicit, Optimizer
 from stremax.utils import Timestep, Transition, broadcast
 from stremax.utils.typing import (
     Array,
@@ -116,7 +116,7 @@ class StreamTD:
             lambda t, g: broadcast(discount, t) * t + g, state.value_trace, value_grads
         )
 
-        if isinstance(self.value_optimizer, Implicit):
+        if isinstance(self.value_optimizer, (Implicit, VOGD)):
             gradient_trace = sum(
                 jnp.sum(g * z, axis=tuple(range(1, g.ndim)))
                 for g, z in zip(

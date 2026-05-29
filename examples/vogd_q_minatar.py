@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import lox
 
-from stremax.algorithms import StreamSARSA, StreamSARSAConfig
+from stremax.algorithms import StreamQ, StreamQConfig
 from stremax.environments import environment
 from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
@@ -16,10 +16,12 @@ from stremax.environments.wrappers import (
 )
 from stremax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from stremax.networks import Flatten, heads, sparse
-from stremax.optimizers import ObGD, ObGDConfig
+from stremax.optimizers import VOGD, VOGDConfig
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+parser.add_argument(
+    "--wandb", action="store_true", help="Enable Weights & Biases logging."
+)
 parser.add_argument(
     "--env-id",
     default="gymnax::Breakout-MinAtar",
@@ -30,6 +32,12 @@ parser.add_argument(
         "gymnax::SpaceInvaders-MinAtar",
     ],
     help="MinAtar environment to train on.",
+)
+parser.add_argument(
+    "--eta",
+    type=float,
+    default=0.5,
+    help="VOGD step-size scale (no base learning rate; eta multiplies the variance-optimal step).",
 )
 args = parser.parse_args()
 
@@ -50,7 +58,7 @@ env = NormalizeRewardWrapper(env, gamma=gamma)
 
 num_actions = env.action_space(env_params).n
 
-config = StreamSARSAConfig(
+config = StreamQConfig(
     num_envs=1,
     trace_lambda=trace_lambda,
     gamma=gamma,
@@ -76,19 +84,11 @@ q_network = nn.Sequential(
     ]
 )
 
-q_optimizer = ObGD(
-    cfg=ObGDConfig(
-        lr=1.0,
-        kappa=2.0,
-        beta2=0.999,
-        eps=1e-8,
-        adaptive=False,
-    ),
-)
+q_optimizer = VOGD(cfg=VOGDConfig(eta=args.eta))
 
 epsilon_start = 1.0
 epsilon_end = 0.01
-exploration_fraction = 0.05
+exploration_fraction = 0.2
 exploration_steps = exploration_fraction * total_timesteps
 
 
@@ -97,7 +97,7 @@ def epsilon_schedule(step):
     return epsilon_start + frac * (epsilon_end - epsilon_start)
 
 
-agent = StreamSARSA(
+agent = StreamQ(
     config,
     env,
     env_params,
@@ -110,13 +110,13 @@ agent = StreamSARSA(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"stream-SARSA__{env_id}__obgd"
+group = f"stream-Q__{env_id}__vogd__eta{args.eta}"
 
 loggers = [
     DashboardLogger(
         total_timesteps=total_timesteps,
         summary={
-            "Algorithm": "stream-SARSA",
+            "Algorithm": "stream-Q",
             "Environment": env_id,
             "Total Timesteps": f"{total_timesteps:_}",
         },
@@ -126,11 +126,11 @@ if args.wandb:
     loggers.append(
         WandbLogger(
             project="stremax",
-            name="stream-SARSA",
+            name="stream-Q",
             mode="online",
             group=group,
             cfg={
-                "algorithm": "stream-SARSA",
+                "algorithm": "stream-Q",
                 "env_id": env_id,
                 "total_timesteps": total_timesteps,
                 **dataclasses.asdict(config),

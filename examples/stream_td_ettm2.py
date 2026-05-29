@@ -22,12 +22,23 @@ from stremax.optimizers import ObGD, ObGDConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+parser.add_argument(
+    "--env-id",
+    default="ett::ETTm2",
+    choices=[
+        "ett::ETTh1",
+        "ett::ETTh2",
+        "ett::ETTm1",
+        "ett::ETTm2",
+    ],
+    help="ETT dataset to train on.",
+)
 args = parser.parse_args()
 
 total_steps = 68_000
 seed = 0
 num_seeds = 5
-env_id = "ett::ETTm2"
+env_id = args.env_id
 
 gamma = 0.99
 trace_lambda = 0.8

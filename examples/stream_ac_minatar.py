@@ -21,6 +21,17 @@ from stremax.optimizers import ObGD, ObGDConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+parser.add_argument(
+    "--env-id",
+    default="gymnax::Breakout-MinAtar",
+    choices=[
+        "gymnax::Asterix-MinAtar",
+        "gymnax::Breakout-MinAtar",
+        "gymnax::Freeway-MinAtar",
+        "gymnax::SpaceInvaders-MinAtar",
+    ],
+    help="MinAtar environment to train on.",
+)
 args = parser.parse_args()
 
 total_timesteps = 5_000_000
@@ -28,7 +39,7 @@ num_epochs = 100
 num_steps = total_timesteps // num_epochs
 seed = 0
 num_seeds = 5
-env_id = "gymnax::Breakout-MinAtar"
+env_id = args.env_id
 
 env, env_params = environment.make(env_id)
 env = StickyActionWrapper(env)

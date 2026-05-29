@@ -22,16 +22,30 @@ from stremax.optimizers import Implicit, ImplicitConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+parser.add_argument(
+    "--env-id",
+    default="ett::ETTm2",
+    choices=[
+        "ett::ETTh1",
+        "ett::ETTh2",
+        "ett::ETTm1",
+        "ett::ETTm2",
+    ],
+    help="ETT dataset to train on.",
+)
+parser.add_argument(
+    "--lr", type=float, default=1.0, help="Implicit optimizer learning rate."
+)
 args = parser.parse_args()
 
 total_steps = 68_000
 seed = 0
 num_seeds = 5
-env_id = "ett::ETTm2"
+env_id = args.env_id
 
 gamma = 0.99
 trace_lambda = 0.8
-lr = 1.0
+lr = args.lr
 beta = 0.999
 
 env, env_params = environment.make(env_id)
