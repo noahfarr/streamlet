@@ -13,6 +13,7 @@ from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
+    StickyActionWrapper,
 )
 from stremax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from stremax.networks import Flatten, heads, sparse
@@ -44,6 +45,7 @@ gamma = 0.99
 trace_lambda = 0.8
 
 env, env_params = environment.make(env_id)
+env = StickyActionWrapper(env)
 env = RecordEpisodeStatistics(env)
 env = NormalizeObservationWrapper(env)
 env = NormalizeRewardWrapper(env, gamma=gamma)

@@ -1,5 +1,5 @@
 import functools
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 import jax
 from jax.extend.core import ClosedJaxpr
@@ -10,6 +10,11 @@ from lox.utils import is_hashable
 from .td_error_scaler import RunningStats, TDErrorScalerState
 from .timestep import Timestep
 from .transition import Transition
+
+
+def canonicalize_dtype(dtype: Any) -> Any:
+    """Canonicalize a dtype for the current JAX configuration."""
+    return jax.dtypes.canonicalize_dtype(dtype)
 
 
 def broadcast(scalar_batch: jax.Array, target_leaf: jax.Array) -> jax.Array:

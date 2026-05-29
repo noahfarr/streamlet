@@ -3,19 +3,11 @@ from __future__ import annotations
 
 import argparse
 
-from launch import (
-    DEFAULT_ETAS,
-    DEFAULT_SETUP,
-    DEFAULT_SKIP,
-    MINATAR_ENV_IDS,
-    SlurmPilot,
-    submit,
-)
+from launch import DEFAULT_SETUP, MINATAR_ENV_IDS, SlurmPilot, submit
 
-# One MinAtar Q-learning example per optimizer.
 OPTIMIZER_EXAMPLES = {
-    # "stream_q": "stream_q_minatar",
-    # "measured_q": "measured_q_minatar",
+    "stream_q": "stream_q_minatar",
+    "measured_q": "measured_q_minatar",
     "implicit_q": "implicit_q_minatar",
     "intentional_q": "intentional_q_minatar",
     "adaptive_q": "adaptive_q_minatar",
@@ -34,8 +26,6 @@ def parse_args() -> argparse.Namespace:
         help="Which optimizers to launch (default: all).",
     )
     p.add_argument("--env-ids", nargs="+", default=MINATAR_ENV_IDS)
-    p.add_argument("--etas", nargs="*", type=float, default=DEFAULT_ETAS)
-    p.add_argument("--skip", nargs="*", default=DEFAULT_SKIP)
     p.add_argument("--device", choices=["cpu", "gpu"], default="cpu")
     p.add_argument("--cluster", default="ias")
     p.add_argument("--partition", default="stud")
@@ -66,8 +56,6 @@ def main() -> None:
             cluster=args.cluster,
             partition=args.partition,
             env_ids=args.env_ids,
-            etas=args.etas,
-            skip=set(args.skip),
             wandb=args.wandb,
             setup=args.setup,
             n_concurrent_jobs=args.n_concurrent_jobs,

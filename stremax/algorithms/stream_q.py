@@ -10,7 +10,7 @@ import optax
 from flax import core, struct
 
 from stremax.optimizers import Implicit, Measured, Optimizer
-from stremax.utils import Timestep, Transition, broadcast
+from stremax.utils import Timestep, Transition, broadcast, canonicalize_dtype
 from stremax.utils.typing import (
     Array,
     Environment,
@@ -166,9 +166,16 @@ class StreamQ:
         )
 
         if isinstance(self.q_optimizer, (Implicit, Measured)):
+            # The interaction must use the same preconditioned trace direction
+            # P z that the Measured update applies, so X = (g - gamma g')(P z).
+            # Implicit and Measured have no preconditioner, so they use the raw trace z.
+            interaction_trace = q_trace
+
             gradient_trace = sum(
                 jnp.sum(g * z, axis=tuple(range(1, g.ndim)))
-                for g, z in zip(jax.tree.leaves(q_grads), jax.tree.leaves(q_trace))
+                for g, z in zip(
+                    jax.tree.leaves(q_grads), jax.tree.leaves(interaction_trace)
+                )
             )
 
             def bootstrap_value(params, obs):
@@ -182,7 +189,9 @@ class StreamQ:
                 )
                 return jvp_value
 
-            next_grad_trace = jax.vmap(directional)(transition.second.obs, q_trace)
+            next_grad_trace = jax.vmap(directional)(
+                transition.second.obs, interaction_trace
+            )
             curvature = gradient_trace - self.cfg.gamma * (
                 1.0 - transition.second.done.astype(jnp.float32)
             ) * next_grad_trace
@@ -224,7 +233,7 @@ class StreamQ:
         )
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
+            (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
         )
         reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
         done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
@@ -283,7 +292,7 @@ class StreamQ:
             timestep=Timestep(
                 obs=obs,
                 action=jnp.zeros(
-                    (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
+                    (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
                 ),
                 reward=jnp.zeros(self.cfg.num_envs),
                 done=jnp.ones(self.cfg.num_envs, dtype=jnp.bool_),

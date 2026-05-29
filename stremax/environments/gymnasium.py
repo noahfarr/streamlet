@@ -4,6 +4,7 @@ import numpy as np
 from flax import struct
 from gymnax.environments import spaces
 
+from stremax.utils import canonicalize_dtype
 from stremax.utils.typing import Array, Key
 
 
@@ -20,7 +21,7 @@ class GymnasiumWrapper:
 
         observation_space = environment.single_observation_space
         self.observation_shape = observation_space.shape
-        self.observation_dtype = jnp.dtype(observation_space.dtype)
+        self.observation_dtype = canonicalize_dtype(observation_space.dtype)
 
         self.num_actions = environment.single_action_space.n
 

@@ -40,7 +40,7 @@ class IntentionalState:
 @dataclass
 class Intentional:
     cfg: IntentionalConfig
-    name: str = "optimizer"
+    name: str = "intentional"
 
     def init(self, parameters: PyTree, num_envs: int) -> IntentionalState:
         second_moment = jax.tree.map(

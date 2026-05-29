@@ -10,7 +10,7 @@ import optax
 from flax import core, struct
 
 from stremax.optimizers import Optimizer
-from stremax.utils import Timestep, Transition, broadcast
+from stremax.utils import Timestep, Transition, broadcast, canonicalize_dtype
 from stremax.utils.typing import (
     Array,
     Environment,
@@ -267,7 +267,7 @@ class QRC:
         )
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
+            (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
         )
         reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
         done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
@@ -336,7 +336,7 @@ class QRC:
             timestep=Timestep(
                 obs=obs,
                 action=jnp.zeros(
-                    (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
+                    (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
                 ),
                 reward=jnp.zeros(self.cfg.num_envs),
                 done=jnp.ones(self.cfg.num_envs, dtype=jnp.bool_),

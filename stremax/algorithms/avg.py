@@ -10,7 +10,7 @@ import optax
 from flax import core, struct
 
 from stremax.optimizers import Optimizer
-from stremax.utils import Timestep, Transition, TDErrorScalerState, broadcast
+from stremax.utils import Timestep, Transition, TDErrorScalerState, broadcast, canonicalize_dtype
 from stremax.utils.typing import (
     Array,
     Environment,
@@ -226,7 +226,7 @@ class AVG:
         )
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=action_space.dtype
+            (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
         )
         done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
 
