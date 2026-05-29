@@ -177,7 +177,7 @@ for i in range(num_epochs):
         "training/episode_returns": episode_returns,
         "training/episode_lengths": episode_lengths,
         "training/discounted_episode_returns": discounted_episode_returns,
-        **logs,
+        **{k: jnp.mean(v, axis=tuple(range(1, v.ndim))) for k, v in logs.items()},
     }
     logger.log(data, step=state.step.mean(dtype=jnp.int32).item())
 
