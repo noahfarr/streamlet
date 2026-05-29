@@ -1,5 +1,6 @@
 import argparse
 import dataclasses
+from pathlib import Path
 
 import flax.linen as nn
 import jax
@@ -21,7 +22,9 @@ from stremax.networks import heads, sparse
 from stremax.optimizers import Measured, MeasuredConfig
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
+parser.add_argument(
+    "--wandb", action="store_true", help="Enable Weights & Biases logging."
+)
 parser.add_argument(
     "--env-id",
     default="ett::ETTm2",
@@ -33,6 +36,24 @@ parser.add_argument(
     ],
     help="ETT dataset to train on.",
 )
+parser.add_argument(
+    "--eta",
+    type=float,
+    default=0.5,
+    help="Measured step-size scale (no base learning rate; eta multiplies the variance-optimal step).",
+)
+parser.add_argument(
+    "--kappa",
+    type=float,
+    default=1.0,
+    help="Per-sample contraction clamp (alpha <= kappa / |X_t|); kappa=1 => no overshoot.",
+)
+parser.add_argument(
+    "--beta",
+    type=float,
+    default=0.999,
+    help="EMA decay for the Measured moment estimates and the observation traces.",
+)
 args = parser.parse_args()
 
 total_steps = 68_000
@@ -42,9 +63,9 @@ env_id = args.env_id
 
 gamma = 0.99
 trace_lambda = 0.8
-eta = 1.0
-kappa = 1.0
-beta = 0.999
+eta = args.eta
+kappa = args.kappa
+beta = args.beta
 
 env, env_params = environment.make(env_id)
 env = RecordEpisodeStatistics(env, gamma=gamma)
@@ -73,7 +94,7 @@ value_network = nn.Sequential(
     ]
 )
 
-value_optimizer = Measured(cfg=MeasuredConfig(eta=eta, kappa=kappa))
+value_optimizer = Measured(cfg=MeasuredConfig(eta=eta, kappa=kappa, beta=beta))
 
 agent = StreamTD(
     config,
@@ -98,8 +119,16 @@ std = np.asarray(logs["normalize_reward/std"][0]).squeeze()
 predictions = np.asarray(logs["value/value"][0]) * std
 cumulants = np.asarray(logs["value/cumulant"][0]) * std
 
-final_td_error = np.asarray(logs["value/td_error"])[:, -1000:].mean(axis=1)
-print(f"final td_error (mean over last 1000 steps): {final_td_error.mean():.4f}")
+td_error = np.asarray(logs["value/td_error"])[:, -1000:]
+final_td_error = td_error.mean(axis=1)
+final_td_rms = np.sqrt(np.square(td_error).mean(axis=1))
+final_td_mae = np.abs(td_error).mean(axis=1)
+print(
+    "final td_error over last 1000 steps -- "
+    f"signed-mean: {final_td_error.mean():.4f}  "
+    f"RMS: {final_td_rms.mean():.4f}  "
+    f"MAE: {final_td_mae.mean():.4f}"
+)
 
 group = f"measured-TD__{env_id}__measured"
 
@@ -132,20 +161,42 @@ for t in reversed(range(total_steps)):
     return_t = return_t * gamma + cumulants[t]
     actual_returns[t] = return_t
 
+# The Monte-Carlo return is truncated near the end of the run (no future
+# cumulants left to accumulate), so drop the last few horizons before scoring.
+horizon = int(round(1.0 / (1.0 - gamma)))
+valid = slice(0, total_steps - 5 * horizon)
+prediction_rmse = np.sqrt(np.mean(np.square(predictions[valid] - actual_returns[valid])))
+print(f"prediction vs return RMSE (de-normalized): {prediction_rmse:.4f}")
+
+plot_dir = Path("plots") / env_id / "measured-TD"
+plot_dir.mkdir(parents=True, exist_ok=True)
+
+
+def crop_to_both(lo, hi):
+    """Set y-limits so both series are in view over the window [lo, hi)."""
+    window = np.concatenate([actual_returns[lo:hi], predictions[lo:hi]])
+    margin = 0.05 * (window.max() - window.min())
+    plt.ylim([window.min() - margin, window.max() + margin])
+
+
 plt.figure(figsize=(12, 4))
 plt.plot(actual_returns, label="Actual Return", linewidth=3.0, color="tab:green")
 plt.plot(predictions, label="Prediction", linewidth=3.0, color="tab:blue")
 plt.xlim([0, 5000])
+crop_to_both(0, 5000)
 plt.xlabel("Time Step", fontsize=20)
 plt.ylabel("Normalized Oil Temp.", fontsize=20)
 plt.legend()
+plt.savefig(plot_dir / "start.png", dpi=150, bbox_inches="tight")
 
 plt.figure(figsize=(12, 4))
 plt.plot(actual_returns, label="Actual Return", linewidth=3.0, color="tab:green")
 plt.plot(predictions, label="Prediction", linewidth=3.0, color="tab:blue")
 plt.xlim([total_steps - 5000, total_steps])
-plt.ylim([35, 85])
+crop_to_both(total_steps - 5000, total_steps)
 plt.xlabel("Time Step", fontsize=20)
 plt.ylabel("Normalized Oil Temp.", fontsize=20)
 plt.legend()
-plt.show()
+plt.savefig(plot_dir / "end.png", dpi=150, bbox_inches="tight")
+
+print(f"Saved plots to {plot_dir}")
