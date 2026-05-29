@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Submit stremax MinAtar examples to SLURM. Run on the ias login node from the repo root.
-# Defaults to the VOGD eta sweep across MinAtar envs; override via env vars (EXAMPLE, ETAS, ENVS, PARTITION, ...).
+# Defaults to the VOGD eta sweep across all MinAtar envs (Breakout skips eta 0.5); override via env vars (EXAMPLE, ETAS, ENVS, SKIP, PARTITION, WANDB, ...).
 set -euo pipefail
 
 export PATH="$HOME/.local/bin:$PATH"
@@ -11,10 +11,11 @@ GRES="${GRES:-gpu:1}"
 CPUS="${CPUS:-4}"
 MEM="${MEM:-16G}"
 TIME="${TIME:-08:00:00}"
-WANDB="${WANDB:-0}"
+WANDB="${WANDB:-1}"
 
 read -r -a ENVS <<< "${ENVS:-gymnax::Breakout-MinAtar gymnax::Asterix-MinAtar gymnax::Freeway-MinAtar gymnax::SpaceInvaders-MinAtar}"
 read -r -a ETAS <<< "${ETAS:-0.25 0.5 1.0}"
+SKIP="${SKIP:-gymnax::Breakout-MinAtar:0.5}"
 
 cd "$(dirname "$0")/.."
 mkdir -p logs
@@ -43,6 +44,7 @@ for env_id in "${ENVS[@]}"; do
     short="${env_id#gymnax::}"
     short="${short%-MinAtar}"
     for eta in "${ETAS[@]}"; do
+        case " $SKIP " in *" ${env_id}:${eta} "*) echo "skip ${env_id} eta=${eta}"; continue;; esac
         submit "${EXAMPLE}-${short}-eta${eta}" --env-id "$env_id" --eta "$eta"
     done
 done
