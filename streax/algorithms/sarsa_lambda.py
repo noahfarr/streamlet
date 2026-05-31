@@ -9,7 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
-from streax.optimizers import Implicit, Optimizer
+from streax.optimizers import Implicit, ObGD, Optimizer
 from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
 from streax.utils.typing import (
     Array,
@@ -152,7 +152,9 @@ class SARSALambda:
             lambda t, g: broadcast(discount, t) * t + g, state.q_trace, q_grads
         )
 
-        if isinstance(self.q_optimizer, Implicit):
+        if isinstance(self.q_optimizer, Implicit) or (
+            isinstance(self.q_optimizer, ObGD) and self.q_optimizer.cfg.exact
+        ):
             gradient_trace = sum(
                 jnp.sum(g * z, axis=tuple(range(1, g.ndim)))
                 for g, z in zip(jax.tree.leaves(q_grads), jax.tree.leaves(q_trace))

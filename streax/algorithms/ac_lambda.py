@@ -9,7 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
-from streax.optimizers import Implicit, Optimizer
+from streax.optimizers import Implicit, ObGD, Optimizer
 from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
 from streax.utils.typing import (
     Array,
@@ -175,7 +175,9 @@ class ACLambda:
             state.actor_optimizer_state, actor_grads, actor_trace, td_error,
         )
 
-        if isinstance(self.critic_optimizer, Implicit):
+        if isinstance(self.critic_optimizer, Implicit) or (
+            isinstance(self.critic_optimizer, ObGD) and self.critic_optimizer.cfg.exact
+        ):
             gradient_trace = sum(
                 jnp.sum(g * z, axis=tuple(range(1, g.ndim)))
                 for g, z in zip(

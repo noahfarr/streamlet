@@ -39,10 +39,19 @@ def main():
         filters={"config.env_id": {"$regex": "MinAtar"}},
     )
 
-    group_cols = ["env_id", "algorithm", "optimizer"]
-    for col in group_cols + [args.return_key, "_step", "run_id"]:
+    for col in ["env_id", "algorithm", "optimizer", args.return_key, "_step", "run_id"]:
         if col not in df.columns:
             raise SystemExit(f"missing column {col!r}; have {sorted(df.columns)}")
+
+    def variant(row):
+        name = row["optimizer"]
+        if name != "measured":
+            return name
+        if row.get("optimizer/adaptive_v") is True:
+            return "measured[adaptiveV]"
+        return f"measured[nu={row.get('optimizer/nu')}]"
+
+    df["variant"] = df.apply(variant, axis=1)
 
     for env_id in sorted(df["env_id"].dropna().unique()):
         env = df[df["env_id"] == env_id]
@@ -51,12 +60,12 @@ def main():
         labels = [f"{c/1e6:.1f}M" for c in checkpoints]
 
         print(f"\n=== {env_id}  (episode return, mean±std over seeds; up to {max_step/1e6:.1f}M) ===\n")
-        header = f"{'algorithm / optimizer':<28}{'seeds':>6}" + "".join(f"{l:>13}" for l in labels)
+        header = f"{'algorithm / variant':<30}{'seeds':>6}" + "".join(f"{l:>13}" for l in labels)
         print(header)
         print("-" * len(header))
 
         rows = []
-        for (algo, opt), grp in env.groupby(["algorithm", "optimizer"], dropna=False):
+        for (algo, opt), grp in env.groupby(["algorithm", "variant"], dropna=False):
             curves = [
                 interpolate(grp[grp["run_id"] == rid], args.return_key, checkpoints)
                 for rid in grp["run_id"].unique()
@@ -71,7 +80,7 @@ def main():
                 f"{m:>6.1f}±{s:<5.1f}" if np.isfinite(m) else f"{'-':>13}"
                 for m, s in zip(mean, std)
             )
-            print(f"{label:<28}{n:>6}{cells}")
+            print(f"{label:<30}{n:>6}{cells}")
 
 
 if __name__ == "__main__":

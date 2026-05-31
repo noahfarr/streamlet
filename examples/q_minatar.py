@@ -18,8 +18,8 @@ from streax.environments.wrappers import (
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from streax.networks import Flatten, heads, sparse
 from streax.optimizers import (
-    AdaptiveQ,
-    AdaptiveQConfig,
+    Adaptive,
+    AdaptiveConfig,
     Implicit,
     ImplicitConfig,
     Intentional,
@@ -53,8 +53,8 @@ OPTIMIZERS = {
     "intentional": lambda: Intentional(
         cfg=IntentionalConfig(gamma=gamma, trace_lambda=trace_lambda, eta=0.25)
     ),
-    "adaptive": lambda: AdaptiveQ(
-        cfg=AdaptiveQConfig(
+    "adaptive": lambda: Adaptive(
+        cfg=AdaptiveConfig(
             gamma=gamma,
             trace_lambda=trace_lambda,
             eta=4.6e-4,
@@ -222,7 +222,32 @@ def main():
         choices=ENV_IDS,
         help="Subset of MinAtar environments to run (default: all).",
     )
+    parser.add_argument(
+        "--exact",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use ObGD's exact (JVP) effective step size instead of the |z|_1 bound.",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=None,
+        help="ObGD base step size. Default: 1.0 for the bound, 1e-3 for --exact "
+        "(lr=1.0 diverges with --exact).",
+    )
     args = parser.parse_args()
+
+    obgd_lr = args.lr if args.lr is not None else (1e-3 if args.exact else 1.0)
+    OPTIMIZERS["obgd"] = lambda: ObGD(
+        cfg=ObGDConfig(
+            lr=obgd_lr,
+            kappa=2.0,
+            beta2=0.999,
+            eps=1e-8,
+            adaptive=False,
+            exact=args.exact,
+        )
+    )
 
     for opt_name in args.optimizers:
         for env_id in args.envs:

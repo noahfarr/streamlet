@@ -16,6 +16,7 @@ class ObGDConfig:
     beta2: float = 0.999
     eps: float = 1e-8
     adaptive: bool = struct.field(pytree_node=False, default=False)
+    exact: bool = struct.field(pytree_node=False, default=False)
 
 
 @struct.dataclass(frozen=True)
@@ -43,10 +44,28 @@ class ObGD:
         gradient: PyTree,
         trace: PyTree,
         td_error: Array,
+        curvature: Array | None = None,
+        squared_grad_norm: Array | None = None,
     ) -> tuple[PyTree, ObGDState]:
-        del gradient
+        del gradient, squared_grad_norm
         cfg = self.cfg
         next_t_step = state.t_step + 1
+
+        if cfg.exact:
+            if cfg.adaptive:
+                raise ValueError(
+                    "ObGD(exact=True) is not supported with adaptive=True: the "
+                    "exact effective step size needs the preconditioned update "
+                    "direction z/sqrt(v_hat), but v_hat is built from the in-update "
+                    "(delta*z)^2 second moment and is unavailable when the curvature "
+                    "term is formed. Use exact with non-adaptive ObGD."
+                )
+            if curvature is None:
+                raise ValueError(
+                    "ObGD(exact=True) requires the curvature term "
+                    "z^T(grad_v(x) - gamma grad_v(x')); route this optimizer through "
+                    "the algorithm's curvature branch, as Implicit/Measured are."
+                )
 
         if cfg.adaptive:
             new_v = jax.tree.map(
@@ -76,7 +95,11 @@ class ObGD:
             )
 
         delta_bar = jnp.maximum(jnp.abs(td_error), 1.0)
-        step_size = cfg.lr / jnp.maximum(1.0, delta_bar * z_sum * cfg.lr * cfg.kappa)
+        if cfg.exact:
+            overshoot = jnp.abs(curvature)
+        else:
+            overshoot = delta_bar * z_sum
+        step_size = cfg.lr / jnp.maximum(1.0, overshoot * cfg.lr * cfg.kappa)
 
         if cfg.adaptive:
 
@@ -105,6 +128,7 @@ class ObGD:
                 f"{self.name}/step_size": step_size.mean(),
                 f"{self.name}/z_sum": z_sum.mean(),
                 f"{self.name}/delta_bar": delta_bar.mean(),
+                f"{self.name}/overshoot": overshoot.mean(),
                 f"{self.name}/update_norm": optax.global_norm(updates),
             }
         )

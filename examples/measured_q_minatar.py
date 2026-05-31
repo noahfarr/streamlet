@@ -17,7 +17,7 @@ from streax.environments.wrappers import (
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from streax.networks import Flatten, heads, sparse
-from streax.optimizers import Measured, MeasuredConfig
+from streax.optimizers import Measured, MeasuredConfig, MeasuredMode
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -57,6 +57,13 @@ parser.add_argument(
     type=float,
     default=1.0,
     help="Weight on the target-variance term E[delta^2 ||z||^2] in the denominator.",
+)
+parser.add_argument(
+    "--mode",
+    default="operator",
+    choices=["operator", "frobenius"],
+    help="Denominator second moment: operator isotropy E[X^2] or Frobenius "
+    "E[||z||^2 ||g - gamma g'||^2].",
 )
 args = parser.parse_args()
 
@@ -110,6 +117,7 @@ q_optimizer = Measured(
         precondition=args.precondition,
         huber=args.huber,
         nu=args.nu,
+        mode=MeasuredMode(args.mode),
     )
 )
 

@@ -11,7 +11,7 @@ from streax.utils.typing import Array, PyTree
 
 
 @struct.dataclass(frozen=True)
-class AdaptiveQConfig:
+class AdaptiveConfig:
     gamma: float
     trace_lambda: float
     eta: float = 4.6e-4
@@ -20,36 +20,36 @@ class AdaptiveQConfig:
 
 
 @struct.dataclass(frozen=True)
-class AdaptiveQState:
+class AdaptiveState:
     second_moment: PyTree
 
 
 @dataclass
-class AdaptiveQ:
-    """Adaptive Q(λ) from "Revisiting Adam for Streaming RL" (arXiv:2605.06764).
+class Adaptive:
+    """Adaptive(λ) from "Revisiting Adam for Streaming RL" (arXiv:2605.06764).
 
     Maintains an EMA of the squared gradient (Adam-style) and uses the
     eligibility trace as the first-moment surrogate. The TD error is clipped to
     [-clip, clip] (default ±1, the derivative of the SmoothL1 loss).
     """
 
-    cfg: AdaptiveQConfig
-    name: str = "adaptive_q"
+    cfg: AdaptiveConfig
+    name: str = "adaptive"
 
-    def init(self, parameters: PyTree, num_envs: int) -> AdaptiveQState:
+    def init(self, parameters: PyTree, num_envs: int) -> AdaptiveState:
         second_moment = jax.tree.map(
             lambda p: jnp.zeros((num_envs, *p.shape), dtype=jnp.float32),
             parameters,
         )
-        return AdaptiveQState(second_moment=second_moment)
+        return AdaptiveState(second_moment=second_moment)
 
     def update(
         self,
-        state: AdaptiveQState,
+        state: AdaptiveState,
         gradient: PyTree,
         trace: PyTree,
         td_error: Array,
-    ) -> tuple[PyTree, AdaptiveQState]:
+    ) -> tuple[PyTree, AdaptiveState]:
         cfg = self.cfg
         gamma_lambda = cfg.gamma * cfg.trace_lambda
 
@@ -86,4 +86,4 @@ class AdaptiveQ:
             }
         )
 
-        return updates, AdaptiveQState(second_moment=new_v)
+        return updates, AdaptiveState(second_moment=new_v)

@@ -17,7 +17,7 @@ from streax.environments.wrappers import (
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from streax.networks import Flatten, heads, sparse
-from streax.optimizers import AdaptiveQ, AdaptiveQConfig
+from streax.optimizers import Adaptive, AdaptiveConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
@@ -78,8 +78,8 @@ q_network = nn.Sequential(
     ]
 )
 
-q_optimizer = AdaptiveQ(
-    cfg=AdaptiveQConfig(
+q_optimizer = Adaptive(
+    cfg=AdaptiveConfig(
         gamma=gamma,
         trace_lambda=trace_lambda,
         eta=4.6e-4,
@@ -112,7 +112,7 @@ agent = QLambda(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"q_lambda__{env_id}__adaptive_q"
+group = f"q_lambda__{env_id}__adaptive"
 
 loggers = [
     DashboardLogger(
