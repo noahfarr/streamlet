@@ -22,6 +22,7 @@ class MeasuredConfig:
     precondition: bool = struct.field(pytree_node=False, default=False)
     beta2: float = 0.999
     adaptive_v: bool = struct.field(pytree_node=False, default=False)
+    rho: float | None = struct.field(pytree_node=False, default=None)
 
 
 @struct.dataclass(frozen=True)
@@ -31,6 +32,7 @@ class MeasuredState:
     y_hat: Array
     v: PyTree = None
     d_hat: Array = None
+    z_hat: Array = None
 
 
 @dataclass
@@ -47,7 +49,10 @@ class Measured:
                 parameters,
             )
         d_hat = jnp.ones((num_envs,), dtype=jnp.float32) if self.cfg.adaptive_v else None
-        return MeasuredState(m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v, d_hat=d_hat)
+        z_hat = jnp.ones((num_envs,), dtype=jnp.float32) if self.cfg.adaptive_v else None
+        return MeasuredState(
+            m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v, d_hat=d_hat, z_hat=z_hat
+        )
 
     def precondition(self, state: MeasuredState, trace: PyTree) -> PyTree:
         if not self.cfg.precondition:
@@ -78,15 +83,22 @@ class Measured:
 
         y_t = jnp.square(td_error) * squared_z_norm
 
+        alpha0 = (
+            self.cfg.eta * jnp.maximum(0.0, state.m_hat) / (state.s_hat + self.cfg.eps)
+        )
+
         nu = self.cfg.nu
         if self.cfg.adaptive_v:
-            nu = self.cfg.nu / (state.d_hat + self.cfg.eps)
+            nu = self.cfg.nu * state.z_hat / (state.d_hat + self.cfg.eps)
 
-        alpha = (
-            self.cfg.eta
-            * jnp.maximum(0.0, state.m_hat)
-            / (state.s_hat + nu * state.y_hat + self.cfg.eps)
-        )
+        if self.cfg.rho is not None:
+            alpha = alpha0 / (1.0 + self.cfg.rho)
+        else:
+            alpha = (
+                self.cfg.eta
+                * jnp.maximum(0.0, state.m_hat)
+                / (state.s_hat + nu * state.y_hat + self.cfg.eps)
+            )
         alpha = jnp.minimum(alpha, self.cfg.alpha_max)
 
         def compute_update(direction_leaf):
@@ -113,14 +125,17 @@ class Measured:
             )
 
         d_hat = state.d_hat
+        z_hat = state.z_hat
         if self.cfg.adaptive_v:
             d_hat = self.cfg.beta * state.d_hat + (1.0 - self.cfg.beta) * jnp.square(
                 td_error
             )
+            z_hat = self.cfg.beta * state.z_hat + (1.0 - self.cfg.beta) * squared_z_norm
 
         lox.log(
             {
                 f"{self.name}/step_size": alpha.mean(),
+                f"{self.name}/alpha0": alpha0.mean(),
                 f"{self.name}/m_hat": m_hat.mean(),
                 f"{self.name}/s_hat": s_hat.mean(),
                 f"{self.name}/y_hat": y_hat.mean(),
@@ -134,5 +149,5 @@ class Measured:
         )
 
         return updates, MeasuredState(
-            m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v, d_hat=d_hat
+            m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v, d_hat=d_hat, z_hat=z_hat
         )

@@ -32,3 +32,9 @@ cluster   = ["slurmpilot"]
 [tool.uv.sources]
 lox = { git = "https://github.com/huterguier/lox" }
 slurmpilot = { git = "ssh://git@github.com/noahfarr/slurmpilot.git", branch = "feat/spignore" }
+
+[dependency-groups]
+dev = [
+    "joblib>=1.5.3",
+    "tqdm>=4.67.3",
+]
