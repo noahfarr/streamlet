@@ -86,7 +86,9 @@ q_network = nn.Sequential(
     ]
 )
 
-q_optimizer = Measured(cfg=MeasuredConfig(eta=args.eta))
+q_optimizer = Measured(
+    cfg=MeasuredConfig(eta=args.eta, precondition=True, huber=True)
+)
 
 epsilon_start = 1.0
 epsilon_end = 0.01
