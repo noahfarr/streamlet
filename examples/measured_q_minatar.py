@@ -137,9 +137,7 @@ agent = QLambda(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-suffix = "__adaptiveV" if args.adaptive_v else ""
-name = f"measured-Q{suffix}"
-group = f"q_lambda__{env_id}__measured{suffix}"
+group = f"q_lambda__{env_id}__measured"
 
 loggers = [
     DashboardLogger(
@@ -155,7 +153,7 @@ if args.wandb:
     loggers.append(
         WandbLogger(
             project="stremax",
-            name=name,
+            name="measured-Q",
             mode="online",
             group=group,
             cfg={
