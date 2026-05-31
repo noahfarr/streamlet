@@ -143,7 +143,7 @@ def run(env_id, opt_name, q_optimizer, use_wandb):
     if use_wandb:
         loggers.append(
             WandbLogger(
-                project="streax",
+                project="stremax",
                 name=f"{opt_name}-Q",
                 mode="online",
                 group=group,

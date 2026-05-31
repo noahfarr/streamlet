@@ -130,7 +130,7 @@ loggers = [
 if args.wandb:
     loggers.append(
         WandbLogger(
-            project="streax",
+            project="stremax",
             name="QRC",
             mode="online",
             group=group,
