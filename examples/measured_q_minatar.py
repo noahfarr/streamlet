@@ -17,7 +17,7 @@ from streax.environments.wrappers import (
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from streax.networks import Flatten, heads, sparse
-from streax.optimizers import Measured, MeasuredConfig, MeasuredMode
+from streax.optimizers import Measured, MeasuredConfig, MeasuredMode, NuMode
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -66,11 +66,11 @@ parser.add_argument(
     "E[||z||^2 ||g - gamma g'||^2].",
 )
 parser.add_argument(
-    "--adaptive-nu",
-    action=argparse.BooleanOptionalAction,
-    default=False,
-    help="Set nu = 1/tr(M) online via the scalar second-moment recursion "
-    "(self-anneals; ignores --nu).",
+    "--nu-mode",
+    default="fixed",
+    choices=["fixed", "trace", "snr"],
+    help="How nu is set: fixed (--nu), trace (1/tr(M) recursion, ~rho=1), or "
+    "snr (nu = nu0 * E||dz||^2 / ||E[dz]||^2, anneals with proximity).",
 )
 args = parser.parse_args()
 
@@ -125,7 +125,7 @@ q_optimizer = Measured(
         huber=args.huber,
         nu=args.nu,
         mode=MeasuredMode(args.mode),
-        adaptive_nu=args.adaptive_nu,
+        nu_mode=NuMode(args.nu_mode),
     )
 )
 
