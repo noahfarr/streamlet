@@ -1,3 +1,4 @@
+import enum
 from dataclasses import dataclass
 
 import jax
@@ -8,6 +9,11 @@ from flax import struct
 
 from streax.utils import broadcast
 from streax.utils.typing import Array, PyTree
+
+
+class MeasuredMode(enum.Enum):
+    OPERATOR = "operator"
+    FROBENIUS = "frobenius"
 
 
 @struct.dataclass(frozen=True)
@@ -21,6 +27,7 @@ class MeasuredConfig:
     huber_delta: float = 1.0
     precondition: bool = struct.field(pytree_node=False, default=False)
     beta2: float = 0.999
+    mode: MeasuredMode = struct.field(pytree_node=False, default=MeasuredMode.OPERATOR)
 
 
 @struct.dataclass(frozen=True)
@@ -60,6 +67,7 @@ class Measured:
         trace: PyTree,
         td_error: Array,
         interaction: Array,
+        squared_grad_norm: Array = None,
     ) -> tuple[PyTree, MeasuredState]:
 
         if self.cfg.huber:
@@ -91,10 +99,13 @@ class Measured:
 
         updates = jax.tree.map(compute_update, direction)
 
+        if self.cfg.mode is MeasuredMode.FROBENIUS:
+            second_moment = squared_grad_norm * squared_z_norm
+        else:
+            second_moment = jnp.square(interaction)
+
         m_hat = self.cfg.beta * state.m_hat + (1.0 - self.cfg.beta) * interaction
-        s_hat = self.cfg.beta * state.s_hat + (1.0 - self.cfg.beta) * jnp.square(
-            interaction
-        )
+        s_hat = self.cfg.beta * state.s_hat + (1.0 - self.cfg.beta) * second_moment
         y_hat = self.cfg.beta * state.y_hat + (1.0 - self.cfg.beta) * y_t
 
         v = state.v

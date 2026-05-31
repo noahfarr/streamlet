@@ -15,7 +15,7 @@ from streax.environments.wrappers import (
     StickyActionWrapper,
 )
 from streax.networks import Flatten, heads, sparse
-from streax.optimizers import Measured, MeasuredConfig
+from streax.optimizers import Measured, MeasuredConfig, MeasuredMode
 
 p = argparse.ArgumentParser()
 p.add_argument("--env-id", default="gymnax::SpaceInvaders-MinAtar")
@@ -26,6 +26,7 @@ p.add_argument("--nu", type=float, default=0.01)
 p.add_argument("--beta", type=float, default=0.999)
 p.add_argument("--huber", action="store_true")
 p.add_argument("--rmsprop", action="store_true")
+p.add_argument("--mode", default="operator", choices=["operator", "frobenius"])
 args = p.parse_args()
 
 gamma, trace_lambda = 0.99, 0.8
@@ -57,7 +58,7 @@ def epsilon_schedule(step):
 
 
 config = QLambdaConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
-optimizer = Measured(cfg=MeasuredConfig(eta=args.eta, nu=args.nu, beta=args.beta, huber=args.huber, precondition=args.rmsprop))
+optimizer = Measured(cfg=MeasuredConfig(eta=args.eta, nu=args.nu, beta=args.beta, huber=args.huber, precondition=args.rmsprop, mode=MeasuredMode(args.mode)))
 agent = QLambda(config, env, env_params, q_network, epsilon_schedule, optimizer)
 
 train = lox.spool(agent.train)

@@ -9,7 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
-from streax.optimizers import Implicit, Measured, Optimizer
+from streax.optimizers import Implicit, Measured, MeasuredMode, ObGD, Optimizer
 from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
 from streax.utils.typing import (
     Array,
@@ -165,7 +165,9 @@ class QLambda:
             lambda t, g: broadcast(discount, t) * t + g, state.q_trace, q_grads
         )
 
-        if isinstance(self.q_optimizer, (Implicit, Measured)):
+        if isinstance(self.q_optimizer, (Implicit, Measured)) or (
+            isinstance(self.q_optimizer, ObGD) and self.q_optimizer.cfg.exact
+        ):
             # The interaction must use the same preconditioned trace direction
             # P z that the optimizer's update applies, so X = (g - gamma g')(P z).
             # Implicit has no preconditioner; Measured optionally applies one.
@@ -196,11 +198,37 @@ class QLambda:
             next_grad_trace = jax.vmap(directional)(
                 transition.second.obs, interaction_trace
             )
-            curvature = gradient_trace - self.cfg.gamma * (
-                1.0 - transition.second.done.astype(jnp.float32)
-            ) * next_grad_trace
+            not_done = 1.0 - transition.second.done.astype(jnp.float32)
+            curvature = gradient_trace - self.cfg.gamma * not_done * next_grad_trace
+
+            squared_grad_norm = None
+            if isinstance(self.q_optimizer, Measured) and (
+                self.q_optimizer.cfg.mode is MeasuredMode.FROBENIUS
+            ):
+                _, bootstrap_vjp = jax.vjp(
+                    lambda params: bootstrap_value(params, transition.second.obs),
+                    state.q_params,
+                )
+                (next_grads,) = jax.vmap(bootstrap_vjp)(
+                    jnp.eye(batch, dtype=q_values.dtype)
+                )
+                grad_diff = jax.tree.map(
+                    lambda g, gn: g - self.cfg.gamma * broadcast(not_done, gn) * gn,
+                    q_grads,
+                    next_grads,
+                )
+                squared_grad_norm = sum(
+                    jnp.sum(jnp.square(b), axis=tuple(range(1, b.ndim)))
+                    for b in jax.tree.leaves(grad_diff)
+                )
+
             q_updates, q_optimizer_state = self.q_optimizer.update(
-                state.q_optimizer_state, q_grads, q_trace, td_error, curvature,
+                state.q_optimizer_state,
+                q_grads,
+                q_trace,
+                td_error,
+                curvature,
+                squared_grad_norm,
             )
         else:
             q_updates, q_optimizer_state = self.q_optimizer.update(
