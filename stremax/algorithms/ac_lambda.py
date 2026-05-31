@@ -22,7 +22,7 @@ from stremax.utils.typing import (
 
 
 @struct.dataclass(frozen=True)
-class StreamACConfig:
+class ACLambdaConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
@@ -31,7 +31,7 @@ class StreamACConfig:
 
 
 @struct.dataclass(frozen=True)
-class StreamACState:
+class ACLambdaState:
     step: int
     update_step: int
     timestep: Timestep
@@ -45,8 +45,8 @@ class StreamACState:
 
 
 @dataclass
-class StreamAC:
-    cfg: StreamACConfig
+class ACLambda:
+    cfg: ACLambdaConfig
     env: Environment
     env_params: EnvParams
     actor_network: nn.Module
@@ -55,23 +55,23 @@ class StreamAC:
     critic_optimizer: Optimizer
 
     def _stochastic_action(
-        self, key: Key, state: StreamACState
-    ) -> tuple[StreamACState, Array, Array]:
+        self, key: Key, state: ACLambdaState
+    ) -> tuple[ACLambdaState, Array, Array]:
         dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
         action, log_prob = dist.sample_and_log_prob(seed=key)
         return state, action, log_prob
 
     def _deterministic_action(
-        self, key: Key, state: StreamACState
-    ) -> tuple[StreamACState, Array, Array]:
+        self, key: Key, state: ACLambdaState
+    ) -> tuple[ACLambdaState, Array, Array]:
         dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
         action = dist.mode()
         log_prob = dist.log_prob(action)
         return state, action, log_prob
 
     def _step(
-        self, state: StreamACState, key: Key, *, policy: Callable
-    ) -> tuple[StreamACState, Transition]:
+        self, state: ACLambdaState, key: Key, *, policy: Callable
+    ) -> tuple[ACLambdaState, Transition]:
         action_key, step_key = jax.random.split(key)
         state, action, log_prob = policy(action_key, state)
 
@@ -102,8 +102,8 @@ class StreamAC:
         )
 
     def _update_step(
-        self, state: StreamACState, key: Key, *, policy: Callable
-    ) -> tuple[StreamACState, None]:
+        self, state: ACLambdaState, key: Key, *, policy: Callable
+    ) -> tuple[ACLambdaState, None]:
         step_key, _ = jax.random.split(key)
         state, transition = self._step(state, step_key, policy=policy)
         state = self._update(state, transition)
@@ -111,9 +111,9 @@ class StreamAC:
 
     def _update(
         self,
-        state: StreamACState,
+        state: ACLambdaState,
         transition: Transition,
-    ) -> StreamACState:
+    ) -> ACLambdaState:
         action = transition.second.action
 
         def compute_log_probs(params):
@@ -248,7 +248,7 @@ class StreamAC:
 
         return state.replace(**new_state)
 
-    def init(self, key: Key) -> StreamACState:
+    def init(self, key: Key) -> ACLambdaState:
         env_key, actor_key, critic_key = jax.random.split(key, 3)
         env_keys = jax.random.split(env_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
@@ -293,12 +293,12 @@ class StreamAC:
             critic_optimizer_state=critic_optimizer_state,
         )
 
-        return StreamACState(**state)
+        return ACLambdaState(**state)
 
-    def warmup(self, key: Key, state: StreamACState, num_steps: int) -> StreamACState:
+    def warmup(self, key: Key, state: ACLambdaState, num_steps: int) -> ACLambdaState:
         return state
 
-    def train(self, key: Key, state: StreamACState, num_steps: int) -> StreamACState:
+    def train(self, key: Key, state: ACLambdaState, num_steps: int) -> ACLambdaState:
         keys = jax.random.split(key, num_steps // self.cfg.num_envs)
         state, _ = jax.lax.scan(
             partial(self._update_step, policy=self._stochastic_action),
@@ -311,10 +311,10 @@ class StreamAC:
     def evaluate(
         self,
         key: Key,
-        state: StreamACState,
+        state: ACLambdaState,
         num_steps: int,
         deterministic: bool = True,
-    ) -> StreamACState:
+    ) -> ACLambdaState:
         reset_key, eval_key = jax.random.split(key)
         reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(

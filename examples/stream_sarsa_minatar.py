@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import lox
 
-from stremax.algorithms import StreamSARSA, StreamSARSAConfig
+from stremax.algorithms import SARSALambda, SARSALambdaConfig
 from stremax.environments import environment
 from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
@@ -52,7 +52,7 @@ env = NormalizeRewardWrapper(env, gamma=gamma)
 
 num_actions = env.action_space(env_params).n
 
-config = StreamSARSAConfig(
+config = SARSALambdaConfig(
     num_envs=1,
     trace_lambda=trace_lambda,
     gamma=gamma,
@@ -99,7 +99,7 @@ def epsilon_schedule(step):
     return epsilon_start + frac * (epsilon_end - epsilon_start)
 
 
-agent = StreamSARSA(
+agent = SARSALambda(
     config,
     env,
     env_params,

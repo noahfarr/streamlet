@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import lox
 
-from stremax.algorithms import StreamAC, StreamACConfig
+from stremax.algorithms import ACLambda, ACLambdaConfig
 from stremax.environments import environment
 from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
@@ -52,7 +52,7 @@ env = NormalizeRewardWrapper(env)
 
 num_actions = env.action_space(env_params).n
 
-config = StreamACConfig(
+config = ACLambdaConfig(
     num_envs=1,
     trace_lambda=0.8,
     entropy_coefficient=0.01,
@@ -97,7 +97,7 @@ actor_optimizer = ObGD(
 )
 critic_optimizer = Implicit(cfg=ImplicitConfig(lr=args.lr))
 
-agent = StreamAC(
+agent = ACLambda(
     config,
     env,
     env_params,

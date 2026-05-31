@@ -22,7 +22,7 @@ from stremax.utils.typing import (
 
 
 @struct.dataclass(frozen=True)
-class StreamTDConfig:
+class TDLambdaConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
@@ -30,7 +30,7 @@ class StreamTDConfig:
 
 
 @struct.dataclass(frozen=True)
-class StreamTDState:
+class TDLambdaState:
     step: int
     update_step: int
     timestep: Timestep
@@ -41,14 +41,14 @@ class StreamTDState:
 
 
 @dataclass
-class StreamTD:
-    cfg: StreamTDConfig
+class TDLambda:
+    cfg: TDLambdaConfig
     env: Environment
     env_params: EnvParams
     value_network: nn.Module
     value_optimizer: Optimizer
 
-    def _step(self, state: StreamTDState, key: Key) -> tuple[StreamTDState, Transition]:
+    def _step(self, state: TDLambdaState, key: Key) -> tuple[TDLambdaState, Transition]:
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
             (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
@@ -81,14 +81,14 @@ class StreamTD:
         )
 
     def _update_step(
-        self, state: StreamTDState, key: Key
-    ) -> tuple[StreamTDState, None]:
+        self, state: TDLambdaState, key: Key
+    ) -> tuple[TDLambdaState, None]:
         step_key, _ = jax.random.split(key)
         state, transition = self._step(state, step_key)
         state = self._update(state, transition)
         return state.replace(update_step=state.update_step + 1), None
 
-    def _update(self, state: StreamTDState, transition: Transition) -> StreamTDState:
+    def _update(self, state: TDLambdaState, transition: Transition) -> TDLambdaState:
         def compute_td_error(params):
             v = self.value_network.apply(params, transition.first.obs)
             value = v.squeeze(-1)
@@ -188,7 +188,7 @@ class StreamTD:
             value_optimizer_state=value_optimizer_state,
         )
 
-    def init(self, key: Key) -> StreamTDState:
+    def init(self, key: Key) -> TDLambdaState:
         env_key, value_key = jax.random.split(key)
         env_keys = jax.random.split(env_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
@@ -212,7 +212,7 @@ class StreamTD:
             value_params,
         )
 
-        return StreamTDState(
+        return TDLambdaState(
             step=0,
             update_step=0,
             timestep=timestep,
@@ -222,10 +222,10 @@ class StreamTD:
             value_optimizer_state=value_optimizer_state,
         )
 
-    def warmup(self, key: Key, state: StreamTDState, num_steps: int) -> StreamTDState:
+    def warmup(self, key: Key, state: TDLambdaState, num_steps: int) -> TDLambdaState:
         return state
 
-    def train(self, key: Key, state: StreamTDState, num_steps: int) -> StreamTDState:
+    def train(self, key: Key, state: TDLambdaState, num_steps: int) -> TDLambdaState:
         keys = jax.random.split(key, num_steps // self.cfg.num_envs)
         state, _ = jax.lax.scan(
             self._update_step,
@@ -236,8 +236,8 @@ class StreamTD:
         return state
 
     def evaluate(
-        self, key: Key, state: StreamTDState, num_steps: int
-    ) -> StreamTDState:
+        self, key: Key, state: TDLambdaState, num_steps: int
+    ) -> TDLambdaState:
         reset_key, eval_key = jax.random.split(key)
         reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(

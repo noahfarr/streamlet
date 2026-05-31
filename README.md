@@ -45,7 +45,7 @@ Train a streaming Q(λ) agent on MinAtar Breakout:
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from stremax.algorithms import StreamQ, StreamQConfig
+from stremax.algorithms import QLambda, QLambdaConfig
 from stremax.environments import environment
 from stremax.networks import Flatten, heads, sparse
 from stremax.optimizers import ObGD, ObGDConfig
@@ -53,7 +53,7 @@ from stremax.optimizers import ObGD, ObGDConfig
 env, env_params = environment.make("gymnax::Breakout-MinAtar")
 num_actions = env.action_space(env_params).n
 
-cfg = StreamQConfig(num_envs=1, gamma=0.99, trace_lambda=0.8)
+cfg = QLambdaConfig(num_envs=1, gamma=0.99, trace_lambda=0.8)
 
 sparse_init = sparse(sparsity=0.9)
 q_network = nn.Sequential([
@@ -66,7 +66,7 @@ q_network = nn.Sequential([
 optimizer = ObGD(ObGDConfig(lr=1.0, kappa=2.0))
 epsilon = lambda step: jnp.maximum(1.0 - step / 1e6, 0.01)
 
-agent = StreamQ(cfg, env, env_params, q_network, epsilon, optimizer)
+agent = QLambda(cfg, env, env_params, q_network, epsilon, optimizer)
 key = jax.random.key(0)
 key, init_key = jax.random.split(key)
 state = agent.init(init_key)
@@ -114,7 +114,7 @@ stremax/
 ├─ examples/          # Runnable scripts (Stream Q / SARSA / AC / TD, QRC, AVG on MinAtar, Brax & ETT)
 ├─ scripts/           # slurmpilot launchers (launch.py, minatar.py) + cluster config templates
 ├─ stremax/
-   ├─ algorithms/     # StreamQ, StreamSARSA, StreamAC, StreamTD, QRC, AVG
+   ├─ algorithms/     # QLambda, SARSALambda, ACLambda, TDLambda, QRC, AVG
    ├─ optimizers/     # ObGD, AdaptiveQ, Implicit, Intentional, optax wrapper
    ├─ environments/   # Gymnax / Brax / ALE / Gymnasium / ETT adapters + wrappers
    ├─ networks/       # heads, layers, initializers

@@ -1,4 +1,4 @@
-"""Per-seed investigation of the Asterix-MinAtar / StreamQ divergence.
+"""Per-seed investigation of the Asterix-MinAtar / QLambda divergence.
 
 Runs a focused diagnostic (default 200k steps) comparing, on identical env
 seeds and an identical network/normalization stack (sticky actions matched):
@@ -27,7 +27,7 @@ import lox
 import matplotlib.pyplot as plt
 import numpy as np
 
-from stremax.algorithms import StreamQ, StreamQConfig
+from stremax.algorithms import QLambda, QLambdaConfig
 from stremax.environments import environment
 from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
@@ -113,9 +113,9 @@ CONFIGS = {
 
 def run_config(name, optimizer, env, env_params, num_actions, init_key, train_key):
     """Train `--num_seeds` seeds and return host-side numpy logs (seeds x steps)."""
-    config = StreamQConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
+    config = QLambdaConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
     network = make_network(num_actions)
-    agent = StreamQ(config, env, env_params, network, epsilon_schedule, optimizer)
+    agent = QLambda(config, env, env_params, network, epsilon_schedule, optimizer)
 
     init = jax.vmap(agent.init)
     train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))

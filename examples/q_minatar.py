@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import lox
 
-from stremax.algorithms import StreamQ, StreamQConfig
+from stremax.algorithms import QLambda, QLambdaConfig
 from stremax.environments import environment
 from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
@@ -87,7 +87,7 @@ def run(env_id, opt_name, q_optimizer, use_wandb):
 
     num_actions = env.action_space(env_params).n
 
-    config = StreamQConfig(
+    config = QLambdaConfig(
         num_envs=1,
         trace_lambda=trace_lambda,
         gamma=gamma,
@@ -115,7 +115,7 @@ def run(env_id, opt_name, q_optimizer, use_wandb):
         ]
     )
 
-    agent = StreamQ(
+    agent = QLambda(
         config,
         env,
         env_params,

@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import lox
 import numpy as np
 
-from stremax.algorithms import StreamTD, StreamTDConfig
+from stremax.algorithms import TDLambda, TDLambdaConfig
 from stremax.environments import environment
 from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
@@ -61,12 +61,12 @@ def value_network():
 
 
 S, T = args.seeds, args.steps
-config = StreamTDConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
+config = TDLambdaConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
 
 
 def run(optimizer):
     env, env_params = build_env()
-    agent = StreamTD(config, env, env_params, value_network(), optimizer)
+    agent = TDLambda(config, env, env_params, value_network(), optimizer)
     init = jax.vmap(agent.init)
     train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
     key = jax.random.key(0)

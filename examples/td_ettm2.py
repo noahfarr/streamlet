@@ -7,7 +7,7 @@ import lox
 import matplotlib.pyplot as plt
 import numpy as np
 
-from stremax.algorithms import StreamTD, StreamTDConfig
+from stremax.algorithms import TDLambda, TDLambdaConfig
 from stremax.environments import environment
 from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
@@ -89,8 +89,8 @@ def value_network():
 
 def evaluate(value_optimizer):
     env, env_params = build_env()
-    config = StreamTDConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
-    agent = StreamTD(config, env, env_params, value_network(), value_optimizer)
+    config = TDLambdaConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
+    agent = TDLambda(config, env, env_params, value_network(), value_optimizer)
 
     init = jax.vmap(agent.init)
     train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))

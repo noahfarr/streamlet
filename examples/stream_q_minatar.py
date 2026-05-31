@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import lox
 
-from stremax.algorithms import StreamQ, StreamQConfig
+from stremax.algorithms import QLambda, QLambdaConfig
 from stremax.environments import environment
 from stremax.environments.wrappers import (
     NormalizeObservationWrapper,
@@ -51,7 +51,7 @@ env = NormalizeRewardWrapper(env)
 
 num_actions = env.action_space(env_params).n
 
-config = StreamQConfig(
+config = QLambdaConfig(
     num_envs=1,
     trace_lambda=0.8,
     gamma=0.99,
@@ -98,7 +98,7 @@ def epsilon_schedule(step):
     return epsilon_start + frac * (epsilon_end - epsilon_start)
 
 
-agent = StreamQ(
+agent = QLambda(
     config,
     env,
     env_params,
