@@ -67,8 +67,20 @@ class AdaptiveQ:
 
         updates = jax.tree.map(compute_update, trace, new_v)
 
+        effective_lr = jax.tree.map(
+            lambda v: cfg.eta / (jnp.sqrt(v) + cfg.eps), new_v
+        )
+        lr_leaves = jax.tree.leaves(effective_lr)
+        step_size = sum(jnp.sum(x) for x in lr_leaves) / sum(x.size for x in lr_leaves)
+        v_leaves = jax.tree.leaves(new_v)
+        precond_rms = sum(jnp.sum(jnp.sqrt(x)) for x in v_leaves) / sum(
+            x.size for x in v_leaves
+        )
+
         lox.log(
             {
+                f"{self.name}/step_size": step_size,
+                f"{self.name}/precond_rms": precond_rms,
                 f"{self.name}/update_norm": optax.global_norm(updates),
                 f"{self.name}/clipped_delta": clipped_delta.mean(),
             }

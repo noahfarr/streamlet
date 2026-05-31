@@ -82,10 +82,23 @@ def test_jvp_matches_reverse_mode_q_max():
     assert jnp.allclose(x_jvp, x_explicit, atol=1e-5, rtol=1e-5)
 
 
+def measured_alpha(cfg, state):
+    # Mirror the step size the optimizer applies: the variance-optimal step of
+    # Eq. (7), eta * max(0, E[X]) / (E[X^2] + nu * E[delta^2 ||z||^2]), capped at 1.
+    alpha = (
+        cfg.eta
+        * jnp.maximum(state.m_hat, 0.0)
+        / (state.s_hat + cfg.nu * state.y_hat + cfg.eps)
+    )
+    return jnp.minimum(alpha, cfg.alpha_max)
+
+
 def test_alpha_converges_to_first_over_second_moment():
+    # With a zero TD error the noise term nu * E[delta^2 ||z||^2] vanishes, so
+    # the step must converge to the noise-free optimum eta * E[X] / E[X^2].
     eta = 0.5
     x = 2.0
-    cfg = MeasuredConfig(eta=eta, beta=0.05, s0=1e-8, alpha_max=1e9)
+    cfg = MeasuredConfig(eta=eta, beta=0.05)
     optimizer = Measured(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
@@ -94,126 +107,117 @@ def test_alpha_converges_to_first_over_second_moment():
     interaction = jnp.full((1,), x)
 
     state = optimizer.init(params, num_envs=1)
-    alpha = None
     for _ in range(5000):
-        alpha = eta * jnp.maximum(state.m_hat, 0.0) / (state.s_hat + cfg.s0)
-        alpha = jnp.minimum(alpha, cfg.alpha_max)
         _, state = optimizer.update(state, params, trace, td_error, interaction)
 
     expected = eta * x / (x**2)
-    assert jnp.allclose(alpha, expected, atol=1e-4)
+    assert jnp.allclose(measured_alpha(cfg, state), expected, atol=1e-4)
 
 
-def test_curvature_clamp_prevents_overshoot():
-    # A large tail interaction with a stale (small) second moment is exactly the
-    # regime-change case that diverges: the variance-optimal step is tuned to a
-    # small E[X^2], but the realized X_t is large. The clamp must keep the
-    # per-sample contraction |1 - alpha * X_t| <= 1.
-    eta = 0.5
-    kappa = 1.0
-    cfg = MeasuredConfig(eta=eta, beta=0.999, s0=1e-8, alpha_max=1e9, kappa=kappa)
-    optimizer = Measured(cfg=cfg)
-
-    params = {"w": jnp.zeros((3,))}
-    trace = {"w": jnp.ones((1, 3))}
-    td_error = jnp.ones((1,))
-
-    # Warm the moments on a small-curvature regime so the variance-optimal step
-    # is large, then hit it with a big interaction.
-    small_x = jnp.full((1,), 1e-3)
-    state = optimizer.init(params, num_envs=1)
-    for _ in range(2000):
-        _, state = optimizer.update(state, params, trace, td_error, small_x)
-
-    big_x = jnp.full((1,), 10.0)
-    alpha_var = eta * jnp.maximum(state.m_hat, 0.0) / (state.s_hat + cfg.s0)
-    assert (alpha_var * big_x > 1.0).all()  # unclamped step would overshoot
-
-    alpha = jnp.minimum(alpha_var, cfg.alpha_max)
-    alpha = jnp.minimum(alpha, cfg.kappa / (jnp.abs(big_x) + cfg.s0))
-    contraction = jnp.abs(1.0 - alpha * big_x)
-    assert (contraction <= 1.0 + 1e-6).all()
-
-
-def test_clamp_inactive_when_step_is_safe():
-    # When the variance-optimal step is already overshoot-free, the curvature
-    # clamp must not bind, so the recovered step matches E[X] / E[X^2] * eta.
+def test_target_variance_term_shrinks_step():
+    # The defining piece of Eq. (7): the nu * E[delta^2 ||z||^2] noise term in
+    # the denominator. A nonzero TD error must drive the step strictly below the
+    # noise-free optimum, and the realized denominator must match E[X^2] + nu * y.
     eta = 0.5
     x = 2.0
-    cfg = MeasuredConfig(eta=eta, beta=0.05, s0=1e-8, alpha_max=1e9, kappa=1.0)
+    delta = 1.5
+    nu = 0.1
+    cfg = MeasuredConfig(eta=eta, beta=0.05, nu=nu)
     optimizer = Measured(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
-    trace = {"w": jnp.ones((1, 3))}
-    td_error = jnp.zeros((1,))
+    trace = {"w": jnp.ones((1, 3))}  # ||z||^2 = 3
+    z_sq = 3.0
+    td_error = jnp.full((1,), delta)
     interaction = jnp.full((1,), x)
 
     state = optimizer.init(params, num_envs=1)
     for _ in range(5000):
         _, state = optimizer.update(state, params, trace, td_error, interaction)
 
-    alpha_var = eta * jnp.maximum(state.m_hat, 0.0) / (state.s_hat + cfg.s0)
-    curvature_cap = cfg.kappa / (abs(x) + cfg.s0)
-    assert alpha_var < curvature_cap  # clamp inactive
-    assert jnp.allclose(alpha_var, eta * x / (x**2), atol=1e-4)
+    assert jnp.allclose(state.m_hat, x, atol=1e-4)
+    assert jnp.allclose(state.s_hat, x**2, atol=1e-4)
+    assert jnp.allclose(state.y_hat, (delta**2) * z_sq, atol=1e-4)
+
+    expected = eta * x / (x**2 + nu * (delta**2) * z_sq)
+    alpha = measured_alpha(cfg, state)
+    assert jnp.allclose(alpha, expected, atol=1e-4)
+    assert alpha < eta * x / (x**2)  # noise term strictly shrinks the step
 
 
-def test_expansive_sample_takes_no_step():
-    # A negative interaction is an expansive sample: no positive step is
-    # contractive, since 1 - alpha * X = 1 + alpha * |X| >= 1. The kappa clamp
-    # only caps that expansion at 1 + kappa; the sign gate must zero the step so
-    # the realized contraction stays in [0, 1]. The lagging max(m_hat, 0) gate is
-    # not enough on its own: warm the moments on positive interactions so m_hat
-    # stays positive, then feed a negative X.
+def test_nonpositive_mean_interaction_gates_step_off():
+    # The paper's one-sided test: when the running estimate of E[X] is
+    # non-positive, no positive scalar step contracts, so the step turns off.
+    # The gate is on the mean m_hat, not the instantaneous sample.
     eta = 0.5
-    cfg = MeasuredConfig(eta=eta, beta=0.999, s0=1e-8, alpha_max=1e9, kappa=1.0)
+    cfg = MeasuredConfig(eta=eta, beta=0.05)
     optimizer = Measured(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
     trace = {"w": jnp.ones((1, 3))}
     td_error = jnp.ones((1,))
+    neg_x = jnp.full((1,), -1.0)
 
-    pos_x = jnp.full((1,), 1.0)
     state = optimizer.init(params, num_envs=1)
     for _ in range(2000):
-        _, state = optimizer.update(state, params, trace, td_error, pos_x)
+        updates, state = optimizer.update(state, params, trace, td_error, neg_x)
 
-    # m_hat is still positive, so the variance-optimal step would be applied.
-    assert (state.m_hat > 0.0).all()
-    alpha_var = eta * jnp.maximum(state.m_hat, 0.0) / (state.s_hat + cfg.s0)
-    assert (alpha_var > 0.0).all()
-
-    neg_x = jnp.full((1,), -1.0)
-    updates, _ = optimizer.update(state, params, trace, neg_x * 0.0 + td_error, neg_x)
-    # The expansive sample is gated to a zero step.
+    assert (state.m_hat < 0.0).all()
+    assert jnp.allclose(measured_alpha(cfg, state), 0.0)
     assert jnp.allclose(updates["w"], 0.0)
 
 
-def test_contraction_bounded_for_all_interaction_signs():
-    # With the sign gate plus the kappa clamp, the realized per-sample
-    # contraction |1 - alpha * X| must stay in [0, 1] for every X, positive or
-    # negative, even when the variance-optimal step is large and stale.
-    eta = 0.5
-    cfg = MeasuredConfig(eta=eta, beta=0.999, s0=1e-8, alpha_max=1e9, kappa=1.0)
+def test_step_is_capped_at_one():
+    # When the variance-optimal step would exceed 1, the optimizer caps it. With
+    # a unit trace and unit TD error the applied update equals the (capped) step,
+    # so we can read it straight off the update.
+    eta = 1.0
+    x = 0.5
+    cfg = MeasuredConfig(eta=eta, beta=0.05, nu=0.0)
     optimizer = Measured(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
     trace = {"w": jnp.ones((1, 3))}
     td_error = jnp.ones((1,))
+    interaction = jnp.full((1,), x)
 
-    small_x = jnp.full((1,), 1e-3)
     state = optimizer.init(params, num_envs=1)
-    for _ in range(2000):
-        _, state = optimizer.update(state, params, trace, td_error, small_x)
+    updates = None
+    for _ in range(5000):
+        updates, state = optimizer.update(state, params, trace, td_error, interaction)
 
-    for x in (-10.0, -1.0, -1e-3, 0.0, 1e-3, 1.0, 10.0):
-        interaction = jnp.full((1,), x)
-        alpha = eta * jnp.maximum(state.m_hat, 0.0) / (state.s_hat + cfg.s0)
-        alpha = jnp.minimum(alpha, cfg.alpha_max)
-        alpha = jnp.minimum(alpha, cfg.kappa / (jnp.abs(interaction) + cfg.s0))
-        alpha = jnp.where(interaction > 0.0, alpha, 0.0)
-        contraction = 1.0 - alpha * interaction
-        assert (contraction >= -1e-6).all() and (contraction <= 1.0 + 1e-6).all()
+    uncapped = eta * x / (x**2)
+    assert uncapped > 1.0  # without the cap the step would overshoot
+    assert jnp.allclose(measured_alpha(cfg, state), 1.0)
+    # update = mean over envs of alpha * td_error * z = 1.0 * 1.0 * 1.0
+    assert jnp.allclose(updates["w"], 1.0, atol=1e-4)
+
+
+def test_update_equals_alpha_times_td_error_times_trace():
+    # The applied update is the mean over the env axis of alpha * delta * z.
+    eta = 0.3
+    cfg = MeasuredConfig(eta=eta, beta=0.05, nu=0.0)
+    optimizer = Measured(cfg=cfg)
+
+    params = {"w": jnp.zeros((2,))}
+    trace = {"w": jnp.array([[1.0, 2.0], [3.0, 4.0]])}
+    td_error = jnp.array([0.5, -1.0])
+    interaction = jnp.array([2.0, 2.0])
+
+    state = optimizer.init(params, num_envs=2)
+    updates, _ = optimizer.update(state, params, trace, td_error, interaction)
+
+    # On the first step the moments are still zero, so the gated step is zero.
+    assert jnp.allclose(updates["w"], 0.0)
+
+    for _ in range(5000):
+        updates, state = optimizer.update(state, params, trace, td_error, interaction)
+
+    alpha = measured_alpha(cfg, state)
+    expected = (
+        alpha[:, None] * td_error[:, None] * trace["w"]
+    ).mean(axis=0)
+    assert jnp.allclose(updates["w"], expected, atol=1e-4)
 
 
 def test_update_is_jittable():
@@ -236,9 +240,9 @@ if __name__ == "__main__":
     test_jvp_matches_reverse_mode_value()
     test_jvp_matches_reverse_mode_q_max()
     test_alpha_converges_to_first_over_second_moment()
-    test_curvature_clamp_prevents_overshoot()
-    test_clamp_inactive_when_step_is_safe()
-    test_expansive_sample_takes_no_step()
-    test_contraction_bounded_for_all_interaction_signs()
+    test_target_variance_term_shrinks_step()
+    test_nonpositive_mean_interaction_gates_step_off()
+    test_step_is_capped_at_one()
+    test_update_equals_alpha_times_td_error_times_trace()
     test_update_is_jittable()
     print("all passed")

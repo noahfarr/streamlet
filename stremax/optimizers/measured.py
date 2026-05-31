@@ -16,6 +16,7 @@ class MeasuredConfig:
     beta: float = 0.999
     eps: float = 1e-8
     nu: float = 0.01
+    alpha_max: float = 1.0
 
 
 @struct.dataclass(frozen=True)
@@ -56,7 +57,7 @@ class Measured:
             * jnp.maximum(0.0, state.m_hat)
             / (state.s_hat + self.cfg.nu * state.y_hat + self.cfg.eps)
         )
-        alpha = jnp.minimum(alpha, 1.0)
+        alpha = jnp.minimum(alpha, self.cfg.alpha_max)
 
         def compute_update(trace_leaf):
             return (

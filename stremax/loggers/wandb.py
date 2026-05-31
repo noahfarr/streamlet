@@ -38,7 +38,7 @@ class WandbLogger:
             for path, leaf in jax.tree_util.tree_leaves_with_path(data)
         }
         for seed, run in self.runs.items():
-            run.log({k: v[seed] for k, v in data.items()}, step=step)
+            run.log({k: v[seed].mean() for k, v in data.items()}, step=step)
 
     def finish(self) -> None:
         for run in self.runs.values():

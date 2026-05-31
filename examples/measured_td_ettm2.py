@@ -37,10 +37,10 @@ parser.add_argument(
     help="Measured step-size scale (no base learning rate; eta multiplies the variance-optimal step).",
 )
 parser.add_argument(
-    "--kappa",
+    "--nu",
     type=float,
-    default=1.0,
-    help="Per-sample contraction clamp (alpha <= kappa / |X_t|); kappa=1 => no overshoot.",
+    default=0.01,
+    help="Target-variance weight on E[delta^2 ||z||^2] in the Measured denominator.",
 )
 parser.add_argument(
     "--beta",
@@ -58,7 +58,7 @@ env_id = args.env_id
 gamma = 0.99
 trace_lambda = 0.8
 eta = args.eta
-kappa = args.kappa
+nu = args.nu
 beta = args.beta
 
 
@@ -88,7 +88,7 @@ def value_network():
 
 env, env_params = build_env()
 config = StreamTDConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
-value_optimizer = Measured(cfg=MeasuredConfig(eta=eta, kappa=kappa, beta=beta))
+value_optimizer = Measured(cfg=MeasuredConfig(eta=eta, nu=nu, beta=beta))
 agent = StreamTD(config, env, env_params, value_network(), value_optimizer)
 
 init = jax.vmap(agent.init)

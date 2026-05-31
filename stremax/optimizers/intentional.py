@@ -152,5 +152,13 @@ class Intentional:
             norm_step=next_norm_step,
             step=next_step,
         )
-        lox.log({f"{self.name}/update_norm": optax.global_norm(updates)})
+        lox.log(
+            {
+                f"{self.name}/step_size": step_size.mean(),
+                f"{self.name}/denominator": denominator.mean(),
+                f"{self.name}/sigma": new_sigma.mean(),
+                f"{self.name}/trace_norm": squared_trace_norm.mean(),
+                f"{self.name}/update_norm": optax.global_norm(updates),
+            }
+        )
         return updates, new_state

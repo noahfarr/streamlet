@@ -4,8 +4,8 @@ Runs a focused diagnostic (default 200k steps) comparing, on identical env
 seeds and an identical network/normalization stack (sticky actions matched):
 
   - obgd                : ObGD baseline (known to learn Asterix).
-  - measured            : Measured with preconditioning ON  (beta_v=0.999).
-  - measured-no-precond : Measured with preconditioning OFF (beta_v=1.0 freezes
+  - measured            : Measured with preconditioning ON  (beta=0.999).
+  - measured-no-precond : Measured with preconditioning OFF (beta=1.0 freezes
                           v at preconditioning_init, so P is a constant ~= I;
                           because alpha self-normalises the uniform scale this
                           is exactly the pre-preconditioning Measured).
@@ -101,12 +101,12 @@ CONFIGS = {
     "obgd": lambda: ObGD(
         cfg=ObGDConfig(lr=1.0, kappa=2.0, beta2=0.999, eps=1e-8, adaptive=False)
     ),
-    "measured": lambda: Measured(cfg=MeasuredConfig(eta=args.eta, beta_v=0.999)),
+    "measured": lambda: Measured(cfg=MeasuredConfig(eta=args.eta, beta=0.999)),
     "measured-no-precond": lambda: Measured(
-        cfg=MeasuredConfig(eta=args.eta, beta_v=1.0)
+        cfg=MeasuredConfig(eta=args.eta, beta=1.0)
     ),
     "measured-alphacap": lambda: Measured(
-        cfg=MeasuredConfig(eta=args.eta, beta_v=1.0, alpha_max=1e-2)
+        cfg=MeasuredConfig(eta=args.eta, beta=1.0, alpha_max=1e-2)
     ),
 }
 

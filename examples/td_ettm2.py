@@ -46,10 +46,10 @@ parser.add_argument(
     help="Measured step-size scale (try 1.0 to remove the underfitting bias).",
 )
 parser.add_argument(
-    "--measured-kappa",
+    "--measured-nu",
     type=float,
-    default=1.0,
-    help="Measured per-sample contraction clamp (smaller => smoother value fit).",
+    default=0.01,
+    help="Measured target-variance weight on E[delta^2 ||z||^2] (larger => smoother value fit).",
 )
 args = parser.parse_args()
 
@@ -60,7 +60,7 @@ env_id = args.env_id
 
 gamma = 0.99
 trace_lambda = 0.8
-beta = 0.999
+beta = 0.99
 
 
 def build_env():
@@ -123,7 +123,7 @@ optimizers = {
     ),
     "stream-TD": ObGD(cfg=ObGDConfig(lr=1.0, kappa=2.0)),
     "measured-TD": Measured(
-        cfg=MeasuredConfig(eta=args.measured_eta, kappa=args.measured_kappa, beta=beta)
+        cfg=MeasuredConfig(eta=args.measured_eta, nu=args.measured_nu, beta=beta)
     ),
 }
 
@@ -133,8 +133,11 @@ def plot_window(ax, steps, predictions, actual_returns):
     sem = predictions.std(axis=0, ddof=1) / np.sqrt(predictions.shape[0])
     ci = 1.96 * sem
     ax.plot(
-        steps, actual_returns[0, steps], label="Actual Return",
-        linewidth=3.0, color="tab:green",
+        steps,
+        actual_returns[0, steps],
+        label="Actual Return",
+        linewidth=3.0,
+        color="tab:green",
     )
     ax.plot(steps, mean[steps], label="Prediction", linewidth=3.0, color="tab:blue")
     ax.fill_between(
@@ -157,7 +160,9 @@ for name, value_optimizer in optimizers.items():
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(12, 4))
-    plot_window(ax, np.arange(total_steps - 5000, total_steps), predictions, actual_returns)
+    plot_window(
+        ax, np.arange(total_steps - 5000, total_steps), predictions, actual_returns
+    )
     ax.set_ylim([35, 85])
     fig.savefig(plot_dir / "end.png", dpi=150, bbox_inches="tight")
     plt.close(fig)
