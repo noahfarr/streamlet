@@ -127,7 +127,7 @@ def run(env_id, opt_name, q_optimizer, use_wandb):
     init = jax.vmap(agent.init)
     train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-    group = f"stream-Q__{env_id}__{opt_name}"
+    group = f"q_lambda__{env_id}__{opt_name}"
 
     loggers = [
         DashboardLogger(

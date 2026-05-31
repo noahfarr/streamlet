@@ -115,7 +115,7 @@ agent = QRC(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"QRC__{env_id}__sgd"
+group = f"qrc__{env_id}__sgd"
 
 loggers = [
     DashboardLogger(

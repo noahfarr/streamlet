@@ -112,7 +112,7 @@ agent = QLambda(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"adaptive-Q__{env_id}__adaptive_q"
+group = f"q_lambda__{env_id}__adaptive_q"
 
 loggers = [
     DashboardLogger(

@@ -106,7 +106,7 @@ agent = QLambda(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"implicit-Q__{env_id}__implicit"
+group = f"q_lambda__{env_id}__implicit"
 
 loggers = [
     DashboardLogger(

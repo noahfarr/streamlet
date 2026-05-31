@@ -52,8 +52,11 @@ PYTHON_BINARY = "uv run --no-sync python"
 def build_sweep(
     env_ids: list[str],
     wandb: bool,
+    extra_args: str = "",
 ) -> list[str]:
     suffix = " --wandb" if wandb else ""
+    if extra_args:
+        suffix += f" {extra_args}"
 
     return [f"--env-id={env_id}{suffix}" for env_id in env_ids]
 
@@ -74,12 +77,14 @@ def submit(
     mem: int | None = None,
     max_runtime_minutes: int | None = None,
     dry_run: bool = False,
+    extra_args: str = "",
 ) -> tuple[str, int | None]:
     """Submit one example as a SLURM array job. Returns (jobname, jobid)."""
     preset = DEVICE_PRESETS[device]
     sweep = build_sweep(
         env_ids=env_ids if env_ids is not None else MINATAR_ENV_IDS,
         wandb=wandb,
+        extra_args=extra_args,
     )
     if not sweep:
         raise SystemExit(f"Sweep for {example} is empty (check env-ids/skip).")

@@ -33,6 +33,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--setup", default=DEFAULT_SETUP)
     p.add_argument("--n-concurrent-jobs", type=int, default=None)
     p.add_argument(
+        "--example-args",
+        default="",
+        help="Extra args appended to every example task (e.g. '--adaptive-v').",
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
         help="Prepare the job files but do not submit to SLURM.",
@@ -60,6 +65,7 @@ def main() -> None:
             setup=args.setup,
             n_concurrent_jobs=args.n_concurrent_jobs,
             dry_run=args.dry_run,
+            extra_args=args.example_args,
         )
         submitted.append(jobname)
 

@@ -112,7 +112,7 @@ agent = SARSALambda(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"stream-SARSA__{env_id}__obgd"
+group = f"sarsa_lambda__{env_id}__obgd"
 
 loggers = [
     DashboardLogger(

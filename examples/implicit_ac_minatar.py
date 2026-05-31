@@ -111,7 +111,7 @@ agent = ACLambda(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"implicit-AC__{env_id}__obgd-implicit"
+group = f"ac_lambda__{env_id}__obgd-implicit"
 
 loggers = [
     DashboardLogger(

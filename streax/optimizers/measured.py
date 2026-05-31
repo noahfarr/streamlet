@@ -21,6 +21,7 @@ class MeasuredConfig:
     huber_delta: float = 1.0
     precondition: bool = struct.field(pytree_node=False, default=False)
     beta2: float = 0.999
+    adaptive_v: bool = struct.field(pytree_node=False, default=False)
 
 
 @struct.dataclass(frozen=True)
@@ -29,6 +30,7 @@ class MeasuredState:
     s_hat: Array
     y_hat: Array
     v: PyTree = None
+    d_hat: Array = None
 
 
 @dataclass
@@ -44,14 +46,10 @@ class Measured:
                 lambda p: jnp.ones((num_envs, *p.shape), dtype=jnp.float32),
                 parameters,
             )
-        return MeasuredState(m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v)
+        d_hat = jnp.ones((num_envs,), dtype=jnp.float32) if self.cfg.adaptive_v else None
+        return MeasuredState(m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v, d_hat=d_hat)
 
     def precondition(self, state: MeasuredState, trace: PyTree) -> PyTree:
-        # Diagonal RMSProp preconditioner rho = 1 / (sqrt(v) + eps) applied to the
-        # update direction. The interaction X and the noise term are formed in this
-        # same preconditioned direction (paper Section 5), so the algorithm calls
-        # this to build the trace it feeds the JVP. v is initialised to ones, so
-        # rho starts at ~1 and anneals toward 1/|g| as the second moment fills in.
         if not self.cfg.precondition:
             return trace
         return jax.tree.map(
@@ -80,10 +78,14 @@ class Measured:
 
         y_t = jnp.square(td_error) * squared_z_norm
 
+        nu = self.cfg.nu
+        if self.cfg.adaptive_v:
+            nu = self.cfg.nu / (state.d_hat + self.cfg.eps)
+
         alpha = (
             self.cfg.eta
             * jnp.maximum(0.0, state.m_hat)
-            / (state.s_hat + self.cfg.nu * state.y_hat + self.cfg.eps)
+            / (state.s_hat + nu * state.y_hat + self.cfg.eps)
         )
         alpha = jnp.minimum(alpha, self.cfg.alpha_max)
 
@@ -110,12 +112,19 @@ class Measured:
                 gradient,
             )
 
+        d_hat = state.d_hat
+        if self.cfg.adaptive_v:
+            d_hat = self.cfg.beta * state.d_hat + (1.0 - self.cfg.beta) * jnp.square(
+                td_error
+            )
+
         lox.log(
             {
                 f"{self.name}/step_size": alpha.mean(),
                 f"{self.name}/m_hat": m_hat.mean(),
                 f"{self.name}/s_hat": s_hat.mean(),
                 f"{self.name}/y_hat": y_hat.mean(),
+                f"{self.name}/nu": jnp.mean(jnp.asarray(nu)),
                 f"{self.name}/expansive_fraction": (state.m_hat <= 0.0).mean(),
                 f"{self.name}/cv2": (
                     s_hat / (jnp.square(m_hat) + self.cfg.eps) - 1.0
@@ -124,4 +133,6 @@ class Measured:
             }
         )
 
-        return updates, MeasuredState(m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v)
+        return updates, MeasuredState(
+            m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v, d_hat=d_hat
+        )

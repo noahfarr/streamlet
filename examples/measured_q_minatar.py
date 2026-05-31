@@ -52,6 +52,12 @@ parser.add_argument(
     default=True,
     help="Clip the TD error to +/- huber_delta before the update.",
 )
+parser.add_argument(
+    "--adaptive-v",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="Scale nu by 1/E[delta^2] so the noise term damps the step near convergence.",
+)
 args = parser.parse_args()
 
 total_timesteps = 5_000_000
@@ -99,7 +105,12 @@ q_network = nn.Sequential(
 )
 
 q_optimizer = Measured(
-    cfg=MeasuredConfig(eta=args.eta, precondition=args.precondition, huber=args.huber)
+    cfg=MeasuredConfig(
+        eta=args.eta,
+        precondition=args.precondition,
+        huber=args.huber,
+        adaptive_v=args.adaptive_v,
+    )
 )
 
 epsilon_start = 1.0
@@ -126,7 +137,9 @@ agent = QLambda(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"stream-Q__{env_id}__measured__eta{args.eta}"
+suffix = "__adaptiveV" if args.adaptive_v else ""
+name = f"measured-Q{suffix}"
+group = f"q_lambda__{env_id}__measured{suffix}"
 
 loggers = [
     DashboardLogger(
@@ -142,7 +155,7 @@ if args.wandb:
     loggers.append(
         WandbLogger(
             project="stremax",
-            name="measured-Q",
+            name=name,
             mode="online",
             group=group,
             cfg={
