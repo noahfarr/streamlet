@@ -117,7 +117,7 @@ loggers = [
     DashboardLogger(
         total_timesteps=total_timesteps,
         summary={
-            "Algorithm": "implicit-AC",
+            "Algorithm": "ac_lambda",
             "Environment": env_id,
             "Total Timesteps": f"{total_timesteps:_}",
         },
@@ -131,7 +131,7 @@ if args.wandb:
             mode="online",
             group=group,
             cfg={
-                "algorithm": "implicit-AC",
+                "algorithm": "ac_lambda",
                 "env_id": env_id,
                 "total_timesteps": total_timesteps,
                 **dataclasses.asdict(config),

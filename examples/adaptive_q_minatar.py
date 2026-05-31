@@ -118,7 +118,7 @@ loggers = [
     DashboardLogger(
         total_timesteps=total_timesteps,
         summary={
-            "Algorithm": "adaptive-Q",
+            "Algorithm": "q_lambda",
             "Environment": env_id,
             "Total Timesteps": f"{total_timesteps:_}",
         },
@@ -132,7 +132,7 @@ if args.wandb:
             mode="online",
             group=group,
             cfg={
-                "algorithm": "adaptive-Q",
+                "algorithm": "q_lambda",
                 "env_id": env_id,
                 "total_timesteps": total_timesteps,
                 **dataclasses.asdict(config),

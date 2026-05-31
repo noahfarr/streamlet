@@ -133,7 +133,7 @@ def run(env_id, opt_name, q_optimizer, use_wandb):
         DashboardLogger(
             total_timesteps=total_timesteps,
             summary={
-                "Algorithm": "stream-Q",
+                "Algorithm": "q_lambda",
                 "Environment": env_id,
                 "Optimizer": opt_name,
                 "Total Timesteps": f"{total_timesteps:_}",
@@ -148,7 +148,7 @@ def run(env_id, opt_name, q_optimizer, use_wandb):
                 mode="online",
                 group=group,
                 cfg={
-                    "algorithm": "stream-Q",
+                    "algorithm": "q_lambda",
                     "env_id": env_id,
                     "total_timesteps": total_timesteps,
                     **dataclasses.asdict(config),
