@@ -111,6 +111,10 @@ class Measured:
                 f"{self.name}/m_hat": m_hat.mean(),
                 f"{self.name}/s_hat": s_hat.mean(),
                 f"{self.name}/y_hat": y_hat.mean(),
+                f"{self.name}/noise_ratio": (y_hat / (s_hat + self.cfg.eps)).mean(),
+                f"{self.name}/rho": (
+                    self.cfg.nu * y_hat / (s_hat + self.cfg.eps)
+                ).mean(),
                 f"{self.name}/expansive_fraction": (state.m_hat <= 0.0).mean(),
                 f"{self.name}/cv2": (
                     s_hat / (jnp.square(m_hat) + self.cfg.eps) - 1.0
