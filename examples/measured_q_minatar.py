@@ -40,6 +40,18 @@ parser.add_argument(
     default=0.5,
     help="Measured step-size scale (no base learning rate; eta multiplies the variance-optimal step).",
 )
+parser.add_argument(
+    "--precondition",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Diagonal RMSProp preconditioner on the update direction.",
+)
+parser.add_argument(
+    "--huber",
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help="Clip the TD error to +/- huber_delta before the update.",
+)
 args = parser.parse_args()
 
 total_timesteps = 5_000_000
@@ -87,7 +99,7 @@ q_network = nn.Sequential(
 )
 
 q_optimizer = Measured(
-    cfg=MeasuredConfig(eta=args.eta, precondition=True, huber=True)
+    cfg=MeasuredConfig(eta=args.eta, precondition=args.precondition, huber=args.huber)
 )
 
 epsilon_start = 1.0
