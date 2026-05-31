@@ -65,6 +65,13 @@ parser.add_argument(
     help="Denominator second moment: operator isotropy E[X^2] or Frobenius "
     "E[||z||^2 ||g - gamma g'||^2].",
 )
+parser.add_argument(
+    "--adaptive-nu",
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help="Set nu = 1/tr(M) online via the scalar second-moment recursion "
+    "(self-anneals; ignores --nu).",
+)
 args = parser.parse_args()
 
 total_timesteps = 5_000_000
@@ -118,6 +125,7 @@ q_optimizer = Measured(
         huber=args.huber,
         nu=args.nu,
         mode=MeasuredMode(args.mode),
+        adaptive_nu=args.adaptive_nu,
     )
 )
 
