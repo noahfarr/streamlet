@@ -15,7 +15,7 @@ Most deep RL is built around large replay buffers and big batched updates. `Stre
 
 | | Details |
 |---|---|
-| 🤖 **Algorithms** | [Stream Q(λ)](https://arxiv.org/abs/2410.14606), [Stream AC(λ)](https://arxiv.org/abs/2410.14606), [Stream SARSA(λ)](https://arxiv.org/abs/2410.14606), [Stream TD(λ)](https://arxiv.org/abs/2410.14606), [QRC](https://arxiv.org/abs/2507.09087), and [AVG](https://arxiv.org/abs/2411.15370) — all online, with eligibility traces and no replay buffer |
+| 🤖 **Algorithms** | [Q(λ)](https://arxiv.org/abs/2410.14606), [AC(λ)](https://arxiv.org/abs/2410.14606), [SARSA(λ)](https://arxiv.org/abs/2410.14606), [TD(λ)](https://arxiv.org/abs/2410.14606), [QRC(λ)](https://arxiv.org/abs/2507.09087), and [AVG(λ)](https://arxiv.org/abs/2411.15370) — all online, with eligibility traces and no replay buffer |
 | ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606), [`AdaptiveQ`](https://arxiv.org/abs/2605.06764), [`Implicit`](https://arxiv.org/abs/2505.01361), [`Intentional`](https://arxiv.org/abs/2604.19033), and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
 | 🎮 **Environments** | [Gymnax](https://github.com/RobertTLange/gymnax), [Brax](https://github.com/google/brax), [ALE](https://github.com/Farama-Foundation/Arcade-Learning-Environment), [Gymnasium](https://github.com/Farama-Foundation/Gymnasium), and the built-in [ETT](https://github.com/zhouhaoyi/ETDataset) time-series prediction dataset behind a single `make("namespace::env_id")` entry point |
 | 🧰 **Wrappers** | Observation / reward normalization, observation traces, episode-statistics recording, sticky actions |
@@ -111,7 +111,7 @@ Each node runs `uv sync --frozen` against the shipped `uv.lock` before training.
 
 ```
 streax/
-├─ examples/          # Runnable scripts (Stream Q / SARSA / AC / TD, QRC, AVG on MinAtar, Brax & ETT)
+├─ examples/          # Runnable scripts (Q / SARSA / AC / TD, QRC, AVG on MinAtar, Brax & ETT)
 ├─ scripts/           # slurmpilot launchers (launch.py, minatar.py) + cluster config templates
 ├─ streax/
    ├─ algorithms/     # QLambda, SARSALambda, ACLambda, TDLambda, QRC, AVG
