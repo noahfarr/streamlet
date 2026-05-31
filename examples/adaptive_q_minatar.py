@@ -7,17 +7,17 @@ import jax
 import jax.numpy as jnp
 import lox
 
-from stremax.algorithms import QLambda, QLambdaConfig
-from stremax.environments import environment
-from stremax.environments.wrappers import (
+from streax.algorithms import QLambda, QLambdaConfig
+from streax.environments import environment
+from streax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
     StickyActionWrapper,
 )
-from stremax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from stremax.networks import Flatten, heads, sparse
-from stremax.optimizers import AdaptiveQ, AdaptiveQConfig
+from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
+from streax.networks import Flatten, heads, sparse
+from streax.optimizers import AdaptiveQ, AdaptiveQConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
@@ -127,7 +127,7 @@ loggers = [
 if args.wandb:
     loggers.append(
         WandbLogger(
-            project="stremax",
+            project="streax",
             name="adaptive-Q",
             mode="online",
             group=group,

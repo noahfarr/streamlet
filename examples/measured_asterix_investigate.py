@@ -27,16 +27,16 @@ import lox
 import matplotlib.pyplot as plt
 import numpy as np
 
-from stremax.algorithms import QLambda, QLambdaConfig
-from stremax.environments import environment
-from stremax.environments.wrappers import (
+from streax.algorithms import QLambda, QLambdaConfig
+from streax.environments import environment
+from streax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
     StickyActionWrapper,
 )
-from stremax.networks import Flatten, heads, sparse
-from stremax.optimizers import Measured, MeasuredConfig, ObGD, ObGDConfig
+from streax.networks import Flatten, heads, sparse
+from streax.optimizers import Measured, MeasuredConfig, ObGD, ObGDConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--env-id", default="gymnax::Asterix-MinAtar")

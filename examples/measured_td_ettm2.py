@@ -7,16 +7,16 @@ import lox
 import matplotlib.pyplot as plt
 import numpy as np
 
-from stremax.algorithms import TDLambda, TDLambdaConfig
-from stremax.environments import environment
-from stremax.environments.wrappers import (
+from streax.algorithms import TDLambda, TDLambdaConfig
+from streax.environments import environment
+from streax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     ObservationTracesWrapper,
     RecordEpisodeStatistics,
 )
-from stremax.networks import heads, sparse
-from stremax.optimizers import Measured, MeasuredConfig
+from streax.networks import heads, sparse
+from streax.optimizers import Measured, MeasuredConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument(

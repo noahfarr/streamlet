@@ -25,7 +25,7 @@ DEVICE_PRESETS = {
         env={
             "JAX_PLATFORMS": "cpu",
             "PYTHONUNBUFFERED": "1",
-            "VIRTUAL_ENV": "~/stremax/.venv",
+            "VIRTUAL_ENV": "~/streax/.venv",
         },
     ),
     "gpu": dict(
@@ -38,7 +38,7 @@ DEVICE_PRESETS = {
             "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
             "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
             "PYTHONUNBUFFERED": "1",
-            "VIRTUAL_ENV": "~/stremax/.venv",
+            "VIRTUAL_ENV": "~/streax/.venv",
         },
     ),
 }

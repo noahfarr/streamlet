@@ -8,17 +8,17 @@ import jax.numpy as jnp
 import lox
 import optax
 
-from stremax.algorithms import QRC, QRCConfig
-from stremax.environments import environment
-from stremax.environments.wrappers import (
+from streax.algorithms import QRC, QRCConfig
+from streax.environments import environment
+from streax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
     StickyActionWrapper,
 )
-from stremax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from stremax.networks import Flatten, heads, sparse
-from stremax.optimizers import OptaxOptimizer
+from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
+from streax.networks import Flatten, heads, sparse
+from streax.optimizers import OptaxOptimizer
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
@@ -130,7 +130,7 @@ loggers = [
 if args.wandb:
     loggers.append(
         WandbLogger(
-            project="stremax",
+            project="streax",
             name="QRC",
             mode="online",
             group=group,

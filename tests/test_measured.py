@@ -2,7 +2,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-from stremax.optimizers import Measured, MeasuredConfig
+from streax.optimizers import Measured, MeasuredConfig
 
 
 class MLP(nn.Module):

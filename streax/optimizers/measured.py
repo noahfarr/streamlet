@@ -1,0 +1,127 @@
+from dataclasses import dataclass
+
+import jax
+import jax.numpy as jnp
+import lox
+import optax
+from flax import struct
+
+from streax.utils import broadcast
+from streax.utils.typing import Array, PyTree
+
+
+@struct.dataclass(frozen=True)
+class MeasuredConfig:
+    eta: float = 1.0
+    beta: float = 0.999
+    eps: float = 1e-8
+    nu: float = 0.01
+    alpha_max: float = 1.0
+    huber: bool = False
+    huber_delta: float = 1.0
+    precondition: bool = struct.field(pytree_node=False, default=False)
+    beta2: float = 0.999
+
+
+@struct.dataclass(frozen=True)
+class MeasuredState:
+    m_hat: Array
+    s_hat: Array
+    y_hat: Array
+    v: PyTree = None
+
+
+@dataclass
+class Measured:
+    cfg: MeasuredConfig
+    name: str = "measured"
+
+    def init(self, parameters: PyTree, num_envs: int) -> MeasuredState:
+        m_hat = s_hat = y_hat = jnp.zeros((num_envs,), dtype=jnp.float32)
+        v = None
+        if self.cfg.precondition:
+            v = jax.tree.map(
+                lambda p: jnp.ones((num_envs, *p.shape), dtype=jnp.float32),
+                parameters,
+            )
+        return MeasuredState(m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v)
+
+    def precondition(self, state: MeasuredState, trace: PyTree) -> PyTree:
+        # Diagonal RMSProp preconditioner rho = 1 / (sqrt(v) + eps) applied to the
+        # update direction. The interaction X and the noise term are formed in this
+        # same preconditioned direction (paper Section 5), so the algorithm calls
+        # this to build the trace it feeds the JVP. v is initialised to ones, so
+        # rho starts at ~1 and anneals toward 1/|g| as the second moment fills in.
+        if not self.cfg.precondition:
+            return trace
+        return jax.tree.map(
+            lambda v, t: t / (jnp.sqrt(v) + self.cfg.eps), state.v, trace
+        )
+
+    def update(
+        self,
+        state: MeasuredState,
+        gradient: PyTree,
+        trace: PyTree,
+        td_error: Array,
+        interaction: Array,
+    ) -> tuple[PyTree, MeasuredState]:
+
+        if self.cfg.huber:
+            td_error = jnp.clip(td_error, -self.cfg.huber_delta, self.cfg.huber_delta)
+
+        direction = self.precondition(state, trace)
+
+        def squared_norm(z_leaf):
+            return jnp.sum(jnp.square(z_leaf), axis=tuple(range(1, z_leaf.ndim)))
+
+        tree_norms = jax.tree.map(squared_norm, direction)
+        squared_z_norm = jax.tree_util.tree_reduce(jnp.add, tree_norms)
+
+        y_t = jnp.square(td_error) * squared_z_norm
+
+        alpha = (
+            self.cfg.eta
+            * jnp.maximum(0.0, state.m_hat)
+            / (state.s_hat + self.cfg.nu * state.y_hat + self.cfg.eps)
+        )
+        alpha = jnp.minimum(alpha, self.cfg.alpha_max)
+
+        def compute_update(direction_leaf):
+            return (
+                broadcast(alpha, direction_leaf)
+                * broadcast(td_error, direction_leaf)
+                * direction_leaf
+            ).mean(axis=0)
+
+        updates = jax.tree.map(compute_update, direction)
+
+        m_hat = self.cfg.beta * state.m_hat + (1.0 - self.cfg.beta) * interaction
+        s_hat = self.cfg.beta * state.s_hat + (1.0 - self.cfg.beta) * jnp.square(
+            interaction
+        )
+        y_hat = self.cfg.beta * state.y_hat + (1.0 - self.cfg.beta) * y_t
+
+        v = state.v
+        if self.cfg.precondition:
+            v = jax.tree.map(
+                lambda v, g: self.cfg.beta2 * v + (1.0 - self.cfg.beta2) * jnp.square(g),
+                state.v,
+                gradient,
+            )
+
+        lox.log(
+            {
+                f"{self.name}/step_size": alpha.mean(),
+                f"{self.name}/m_hat": m_hat.mean(),
+                f"{self.name}/s_hat": s_hat.mean(),
+                f"{self.name}/y_hat": y_hat.mean(),
+                f"{self.name}/expansive_fraction": (state.m_hat <= 0.0).mean(),
+                f"{self.name}/cv2": (
+                    s_hat / (jnp.square(m_hat) + self.cfg.eps) - 1.0
+                ).mean(),
+                f"{self.name}/update_norm": optax.global_norm(updates),
+            }
+        )
+
+        return updates, MeasuredState(m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v)
