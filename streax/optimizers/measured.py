@@ -15,14 +15,12 @@ class MeasuredConfig:
     eta: float = 1.0
     beta: float = 0.999
     eps: float = 1e-8
-    nu: float = 0.01
+    nu: float = 1.0
     alpha_max: float = 1.0
     huber: bool = False
     huber_delta: float = 1.0
     precondition: bool = struct.field(pytree_node=False, default=False)
     beta2: float = 0.999
-    adaptive_v: bool = struct.field(pytree_node=False, default=False)
-    rho: float | None = struct.field(pytree_node=False, default=None)
 
 
 @struct.dataclass(frozen=True)
@@ -31,8 +29,6 @@ class MeasuredState:
     s_hat: Array
     y_hat: Array
     v: PyTree = None
-    d_hat: Array = None
-    z_hat: Array = None
 
 
 @dataclass
@@ -48,11 +44,7 @@ class Measured:
                 lambda p: jnp.ones((num_envs, *p.shape), dtype=jnp.float32),
                 parameters,
             )
-        d_hat = jnp.ones((num_envs,), dtype=jnp.float32) if self.cfg.adaptive_v else None
-        z_hat = jnp.ones((num_envs,), dtype=jnp.float32) if self.cfg.adaptive_v else None
-        return MeasuredState(
-            m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v, d_hat=d_hat, z_hat=z_hat
-        )
+        return MeasuredState(m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v)
 
     def precondition(self, state: MeasuredState, trace: PyTree) -> PyTree:
         if not self.cfg.precondition:
@@ -83,22 +75,11 @@ class Measured:
 
         y_t = jnp.square(td_error) * squared_z_norm
 
-        alpha0 = (
-            self.cfg.eta * jnp.maximum(0.0, state.m_hat) / (state.s_hat + self.cfg.eps)
+        alpha = (
+            self.cfg.eta
+            * jnp.maximum(0.0, state.m_hat)
+            / (state.s_hat + self.cfg.nu * state.y_hat + self.cfg.eps)
         )
-
-        nu = self.cfg.nu
-        if self.cfg.adaptive_v:
-            nu = self.cfg.nu * state.z_hat / (state.d_hat + self.cfg.eps)
-
-        if self.cfg.rho is not None:
-            alpha = alpha0 / (1.0 + self.cfg.rho)
-        else:
-            alpha = (
-                self.cfg.eta
-                * jnp.maximum(0.0, state.m_hat)
-                / (state.s_hat + nu * state.y_hat + self.cfg.eps)
-            )
         alpha = jnp.minimum(alpha, self.cfg.alpha_max)
 
         def compute_update(direction_leaf):
@@ -124,22 +105,12 @@ class Measured:
                 gradient,
             )
 
-        d_hat = state.d_hat
-        z_hat = state.z_hat
-        if self.cfg.adaptive_v:
-            d_hat = self.cfg.beta * state.d_hat + (1.0 - self.cfg.beta) * jnp.square(
-                td_error
-            )
-            z_hat = self.cfg.beta * state.z_hat + (1.0 - self.cfg.beta) * squared_z_norm
-
         lox.log(
             {
                 f"{self.name}/step_size": alpha.mean(),
-                f"{self.name}/alpha0": alpha0.mean(),
                 f"{self.name}/m_hat": m_hat.mean(),
                 f"{self.name}/s_hat": s_hat.mean(),
                 f"{self.name}/y_hat": y_hat.mean(),
-                f"{self.name}/nu": jnp.mean(jnp.asarray(nu)),
                 f"{self.name}/expansive_fraction": (state.m_hat <= 0.0).mean(),
                 f"{self.name}/cv2": (
                     s_hat / (jnp.square(m_hat) + self.cfg.eps) - 1.0
@@ -148,6 +119,4 @@ class Measured:
             }
         )
 
-        return updates, MeasuredState(
-            m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v, d_hat=d_hat, z_hat=z_hat
-        )
+        return updates, MeasuredState(m_hat=m_hat, s_hat=s_hat, y_hat=y_hat, v=v)

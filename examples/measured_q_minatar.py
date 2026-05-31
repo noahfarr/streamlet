@@ -53,10 +53,10 @@ parser.add_argument(
     help="Clip the TD error to +/- huber_delta before the update.",
 )
 parser.add_argument(
-    "--adaptive-v",
-    action=argparse.BooleanOptionalAction,
-    default=False,
-    help="Scale nu by 1/E[delta^2] so the noise term damps the step near convergence.",
+    "--nu",
+    type=float,
+    default=1.0,
+    help="Weight on the target-variance term E[delta^2 ||z||^2] in the denominator.",
 )
 args = parser.parse_args()
 
@@ -109,7 +109,7 @@ q_optimizer = Measured(
         eta=args.eta,
         precondition=args.precondition,
         huber=args.huber,
-        adaptive_v=args.adaptive_v,
+        nu=args.nu,
     )
 )
 
