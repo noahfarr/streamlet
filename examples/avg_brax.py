@@ -70,14 +70,6 @@ def l2_normalize(x: jax.Array, eps: float = 1e-12) -> jax.Array:
     return x / jnp.maximum(jnp.linalg.norm(x, axis=-1, keepdims=True), eps)
 
 
-def feature_extractor(x: jax.Array) -> jax.Array:
-    x = nn.Dense(n_hid, kernel_init=orthogonal(), bias_init=zeros)(x)
-    x = nn.leaky_relu(x)
-    x = nn.Dense(n_hid, kernel_init=orthogonal(), bias_init=zeros)(x)
-    x = nn.leaky_relu(x)
-    return l2_normalize(x)
-
-
 config = AVGConfig(
     num_envs=1,
     gamma=gamma,
@@ -90,7 +82,11 @@ config = AVGConfig(
 # a custom module. The actor's mean/log_std heads fold into one Dense(2*dim).
 actor_network = nn.Sequential(
     [
-        feature_extractor,
+        nn.Dense(n_hid, kernel_init=orthogonal(), bias_init=zeros),
+        nn.leaky_relu,
+        nn.Dense(n_hid, kernel_init=orthogonal(), bias_init=zeros),
+        nn.leaky_relu,
+        l2_normalize,
         nn.Dense(2 * action_dim, kernel_init=orthogonal()),
         lambda out: distrax.Transformed(
             distrax.MultivariateNormalDiag(
@@ -105,9 +101,20 @@ actor_network = nn.Sequential(
 critic_network = nn.Sequential(
     [
         lambda obs, action: (
-            feature_extractor(jnp.concatenate([obs, action], axis=-1)),
+            nn.leaky_relu(
+                nn.Dense(n_hid, kernel_init=orthogonal(), bias_init=zeros)(
+                    jnp.concatenate([obs, action], axis=-1)
+                )
+            ),
             action,
         ),
+        lambda features, action: (
+            nn.leaky_relu(
+                nn.Dense(n_hid, kernel_init=orthogonal(), bias_init=zeros)(features)
+            ),
+            action,
+        ),
+        lambda features, action: (l2_normalize(features), action),
         lambda features, action: jnp.concatenate([features, action], axis=-1),
         nn.Dense(1, kernel_init=orthogonal()),
         lambda q_value: jnp.squeeze(q_value, axis=-1),
