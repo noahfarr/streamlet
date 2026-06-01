@@ -16,7 +16,7 @@ from streax.environments.wrappers import (
     StickyActionWrapper,
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from streax.networks import Flatten, heads, sparse
+from streax.networks import Flatten, sparse
 from streax.optimizers import Measured, MeasuredConfig, MeasuredMode, NuMode
 
 parser = argparse.ArgumentParser()
@@ -114,7 +114,7 @@ network = nn.Sequential(
 q_network = nn.Sequential(
     [
         network,
-        heads.DiscreteQNetwork(action_dim=num_actions, kernel_init=sparse_init),
+        nn.Dense(num_actions, kernel_init=sparse_init),
     ]
 )
 

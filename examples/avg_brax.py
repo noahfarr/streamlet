@@ -2,6 +2,7 @@ import argparse
 import dataclasses
 import time
 
+import distrax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -17,7 +18,6 @@ from streax.environments.wrappers import (
     RecordEpisodeStatistics,
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from streax.networks import heads
 from streax.optimizers import OptaxOptimizer
 
 parser = argparse.ArgumentParser()
@@ -84,16 +84,20 @@ class Actor(nn.Module):
     @nn.compact
     def __call__(self, obs: jax.Array) -> object:
         features = feature_extractor(obs)
-        return heads.SquashedGaussian(
-            action_dim=self.action_dim, kernel_init=orthogonal()
-        )(features)
+        mean = nn.Dense(self.action_dim, kernel_init=orthogonal())(features)
+        log_std = nn.Dense(self.action_dim, kernel_init=orthogonal())(features)
+        log_std = jnp.clip(log_std, -20.0, 2.0)
+        base = distrax.MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
+        return distrax.Transformed(base, distrax.Block(distrax.Tanh(), ndims=1))
 
 
 class Critic(nn.Module):
     @nn.compact
     def __call__(self, obs: jax.Array, action: jax.Array) -> jax.Array:
         features = feature_extractor(jnp.concatenate([obs, action], axis=-1))
-        return heads.ContinuousQNetwork(kernel_init=orthogonal())(features, action)
+        x = jnp.concatenate([features, action], axis=-1)
+        q_value = nn.Dense(1, kernel_init=orthogonal())(x)
+        return jnp.squeeze(q_value, axis=-1)
 
 
 config = AVGConfig(

@@ -2,6 +2,7 @@ import argparse
 import dataclasses
 import time
 
+import distrax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -16,7 +17,7 @@ from streax.environments.wrappers import (
     StickyActionWrapper,
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from streax.networks import Flatten, heads, sparse
+from streax.networks import Flatten, sparse
 from streax.optimizers import ObGD, ObGDConfig
 
 parser = argparse.ArgumentParser()
@@ -72,14 +73,15 @@ network = nn.Sequential(
 actor_network = nn.Sequential(
     [
         network,
-        heads.Categorical(action_dim=num_actions, kernel_init=sparse_init),
+        nn.Dense(num_actions, kernel_init=sparse_init),
+        lambda logits: distrax.Categorical(logits=logits),
     ]
 )
 
 critic_network = nn.Sequential(
     [
         network,
-        heads.VNetwork(kernel_init=sparse_init),
+        nn.Dense(1, kernel_init=sparse_init),
     ]
 )
 

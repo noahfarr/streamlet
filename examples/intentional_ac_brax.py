@@ -2,6 +2,7 @@ import argparse
 import dataclasses
 import time
 
+import distrax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -15,7 +16,7 @@ from streax.environments.wrappers import (
     RecordEpisodeStatistics,
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from streax.networks import heads, sparse
+from streax.networks import sparse
 from streax.optimizers import Intentional, IntentionalConfig
 
 parser = argparse.ArgumentParser()
@@ -79,10 +80,10 @@ network = nn.Sequential(
 actor_network = nn.Sequential(
     [
         network,
-        heads.StateDependentGaussian(
-            action_dim=action_dim,
-            transform=nn.softplus,
-            kernel_init=sparse_init,
+        nn.Dense(2 * action_dim, kernel_init=sparse_init),
+        lambda out: distrax.MultivariateNormalDiag(
+            loc=out[..., :action_dim],
+            scale_diag=nn.softplus(out[..., action_dim:]),
         ),
     ]
 )
@@ -90,7 +91,7 @@ actor_network = nn.Sequential(
 critic_network = nn.Sequential(
     [
         network,
-        heads.VNetwork(kernel_init=sparse_init),
+        nn.Dense(1, kernel_init=sparse_init),
     ]
 )
 

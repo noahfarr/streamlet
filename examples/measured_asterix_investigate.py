@@ -35,7 +35,7 @@ from streax.environments.wrappers import (
     RecordEpisodeStatistics,
     StickyActionWrapper,
 )
-from streax.networks import Flatten, heads, sparse
+from streax.networks import Flatten, sparse
 from streax.optimizers import Measured, MeasuredConfig, ObGD, ObGDConfig
 
 parser = argparse.ArgumentParser()
@@ -93,7 +93,7 @@ def make_network(num_actions):
         ]
     )
     return nn.Sequential(
-        [backbone, heads.DiscreteQNetwork(action_dim=num_actions, kernel_init=sparse_init)]
+        [backbone, nn.Dense(num_actions, kernel_init=sparse_init)]
     )
 
 

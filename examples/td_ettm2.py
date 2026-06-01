@@ -15,7 +15,7 @@ from streax.environments.wrappers import (
     ObservationTracesWrapper,
     RecordEpisodeStatistics,
 )
-from streax.networks import heads, sparse
+from streax.networks import sparse
 from streax.optimizers import (
     Implicit,
     ImplicitConfig,
@@ -82,7 +82,7 @@ def value_network():
             nn.Dense(128, kernel_init=sparse_init),
             nn.LayerNorm(),
             nn.leaky_relu,
-            heads.VNetwork(kernel_init=sparse_init),
+            nn.Dense(1, kernel_init=sparse_init),
         ]
     )
 
