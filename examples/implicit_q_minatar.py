@@ -74,7 +74,9 @@ q_network = nn.Sequential(
     ]
 )
 
-q_optimizer = Implicit(cfg=ImplicitConfig(lr=args.lr))
+q_optimizer = Implicit(
+    cfg=ImplicitConfig(gamma=0.99, trace_lambda=0.8, eta=args.lr)
+)
 
 epsilon_start = 1.0
 epsilon_end = 0.01

@@ -12,82 +12,75 @@ from streax.utils.typing import Array, PyTree
 
 @struct.dataclass(frozen=True)
 class ImplicitConfig:
-    lr: float
-    eps: float = 1e-8
-    clip_delta: bool = struct.field(pytree_node=False, default=True)
-    adaptive_clip: bool = struct.field(pytree_node=False, default=True)
-    normalize_delta: bool = struct.field(pytree_node=False, default=False)
+    """Implicit TD(lambda): the Intentional backbone with a closed-loop term.
+
+    The update is
+
+        w <- w + eta * delta_tilde * (rho z) / ( sqrt(sigma_bar <z, rho z>) + eta * c_t )
+
+    with c_t = <g - gamma g', rho z> the interaction (curvature) supplied by the
+    algorithm, and the denominator floored at kappa * sqrt(sigma_bar <z, rho z>)
+    so a negative c_t cannot shrink or flip it. Setting c_t -> 0 recovers
+    Intentional exactly; rho = (sqrt(nu) + eps)^-1 is the RMSProp preconditioner
+    and sigma_bar the discounted accumulated gradient energy E[<g, rho g>].
+    """
+
+    gamma: float
+    trace_lambda: float
+    eta: float = 0.5
+    kappa: float = 1.0
+    beta2: float = 0.999
     beta_clip: float = 0.9998
     beta_norm: float = 0.9998
     clip_multiplier: float = 20.0
+    eps: float = 1e-8
+    normalize_delta: bool = struct.field(pytree_node=False, default=False)
+    use_adaptive_clip: bool = struct.field(pytree_node=False, default=True)
+    use_rmsprop: bool = struct.field(pytree_node=False, default=True)
+    use_sigma: bool = struct.field(pytree_node=False, default=True)
 
 
 @struct.dataclass(frozen=True)
 class ImplicitState:
-    squared_delta: Array
-    absolute_delta: Array
+    second_moment: PyTree
+    sigma: Array
+    squared_delta_ema: Array
+    absolute_delta_ema: Array
     clip_step: Array
     norm_step: Array
+    step: Array
 
 
 @dataclass
 class Implicit:
-
     cfg: ImplicitConfig
     name: str = "implicit"
 
     def init(self, parameters: PyTree, num_envs: int) -> ImplicitState:
-        del parameters
+        second_moment = jax.tree.map(
+            lambda p: jnp.ones((num_envs, *p.shape), dtype=jnp.float32),
+            parameters,
+        )
         zeros = jnp.zeros((num_envs,), dtype=jnp.float32)
         return ImplicitState(
-            squared_delta=jnp.ones((num_envs,), dtype=jnp.float32),
-            absolute_delta=zeros,
+            second_moment=second_moment,
+            sigma=zeros,
+            squared_delta_ema=jnp.ones((num_envs,), dtype=jnp.float32),
+            absolute_delta_ema=zeros,
             clip_step=jnp.int32(0),
             norm_step=jnp.int32(0),
+            step=jnp.int32(0),
         )
 
-    def _safe_delta(
-        self, state: ImplicitState, td_error: Array
-    ) -> tuple[Array, ImplicitState]:
-        cfg = self.cfg
-        if not cfg.clip_delta:
-            return td_error, state
-
-        if cfg.adaptive_clip:
-            clip_step = state.clip_step + 1
-            squared_delta = (
-                cfg.beta_clip * state.squared_delta
-                + (1.0 - cfg.beta_clip) * td_error * td_error
-            )
-            ceiling = cfg.clip_multiplier * jnp.sqrt(
-                squared_delta / (1.0 - cfg.beta_clip**clip_step)
-            )
-            clipped = jnp.sign(td_error) * jnp.minimum(jnp.abs(td_error), ceiling)
-        else:
-            clip_step = state.clip_step
-            squared_delta = state.squared_delta
-            clipped = jnp.clip(td_error, -1.0, 1.0)
-
-        if cfg.normalize_delta:
-            norm_step = state.norm_step + 1
-            absolute_delta = (
-                cfg.beta_norm * state.absolute_delta
-                + (1.0 - cfg.beta_norm) * jnp.abs(clipped)
-            )
-            scale = absolute_delta / (1.0 - cfg.beta_norm**norm_step)
-            safe_delta = clipped / jnp.maximum(scale, 1e-12)
-        else:
-            norm_step = state.norm_step
-            absolute_delta = state.absolute_delta
-            safe_delta = clipped
-
-        state = ImplicitState(
-            squared_delta=squared_delta,
-            absolute_delta=absolute_delta,
-            clip_step=clip_step,
-            norm_step=norm_step,
+    def precondition(self, state: ImplicitState, trace: PyTree) -> PyTree:
+        # rho z, with rho = (sqrt(v) + eps)^-1 from the PRE-update second moment,
+        # so the interaction c_t the algorithm forms uses the same rho as the
+        # update direction below. No-op when RMSProp preconditioning is off.
+        if not self.cfg.use_rmsprop:
+            return trace
+        return jax.tree.map(
+            lambda v, t: t / (jnp.sqrt(v) + self.cfg.eps), state.second_moment, trace
         )
-        return safe_delta, state
 
     def update(
         self,
@@ -96,38 +89,113 @@ class Implicit:
         trace: PyTree,
         td_error: Array,
         curvature: Array,
+        squared_grad_norm: Array | None = None,
     ) -> tuple[PyTree, ImplicitState]:
+        # squared_grad_norm is the Frobenius term used by Measured; the implicit
+        # closed-loop form does not use it.
+        del squared_grad_norm
         cfg = self.cfg
+        next_step = state.step + 1
 
-        safe_delta, state = self._safe_delta(state, td_error)
+        # Preconditioner from the PRE-update second moment, matching precondition()
+        # (and hence the interaction c_t the algorithm passes in).
+        if cfg.use_rmsprop:
+            preconditioner = jax.tree.map(
+                lambda v: jnp.sqrt(v) + cfg.eps, state.second_moment
+            )
+        else:
+            preconditioner = jax.tree.map(jnp.ones_like, state.second_moment)
 
+        new_second_moment = jax.tree.map(
+            lambda v, g: cfg.beta2 * v + (1.0 - cfg.beta2) * jnp.square(g),
+            state.second_moment,
+            gradient,
+        )
+
+        # <g, rho g> and <z, rho z>, with rho = 1 / preconditioner.
         squared_gradient_norm = sum(
-            jnp.sum(jnp.square(g), axis=tuple(range(1, g.ndim)))
-            for g in jax.tree.leaves(gradient)
+            jnp.sum(jnp.square(g) / m, axis=tuple(range(1, g.ndim)))
+            for g, m in zip(jax.tree.leaves(gradient), jax.tree.leaves(preconditioner))
         )
-        effective_curvature = jnp.where(
-            curvature > 0.0, curvature, squared_gradient_norm
+        squared_trace_norm = sum(
+            jnp.sum(jnp.square(t) / m, axis=tuple(range(1, t.ndim)))
+            for t, m in zip(jax.tree.leaves(trace), jax.tree.leaves(preconditioner))
         )
-        denominator = jnp.maximum(1.0 + cfg.lr * effective_curvature, cfg.eps)
-        step_size = jnp.minimum(cfg.lr / denominator, cfg.lr)
 
-        def compute_update(trace_leaf):
-            return (
-                broadcast(step_size, trace_leaf)
-                * broadcast(safe_delta, trace_leaf)
-                * trace_leaf
-            ).mean(axis=0)
+        gamma_lambda = cfg.gamma * cfg.trace_lambda
+        if cfg.use_sigma:
+            new_sigma = state.sigma + (1.0 - gamma_lambda) * (
+                squared_gradient_norm - state.sigma
+            )
+            sigma_unbiased = new_sigma / (1.0 - gamma_lambda**next_step)
+            baseline = jnp.sqrt(sigma_unbiased * squared_trace_norm)
+        else:
+            new_sigma = state.sigma
+            baseline = squared_trace_norm
 
-        updates = jax.tree.map(compute_update, trace)
+        # Closed-loop denominator: sqrt(sigma_bar <z, rho z>) + eta * c_t, floored
+        # at kappa * baseline so a negative interaction cannot flip it.
+        denominator = baseline + cfg.eta * curvature
+        denominator = jnp.maximum(denominator, cfg.kappa * baseline)
+        step_size = cfg.eta / jnp.maximum(denominator, cfg.eps)
 
+        if cfg.use_adaptive_clip:
+            next_clip_step = state.clip_step + 1
+            new_squared_delta_ema = (
+                cfg.beta_clip * state.squared_delta_ema
+                + (1.0 - cfg.beta_clip) * td_error * td_error
+            )
+            clip_ceiling = cfg.clip_multiplier * jnp.sqrt(
+                new_squared_delta_ema / (1.0 - cfg.beta_clip**next_clip_step)
+            )
+            clipped_delta = jnp.sign(td_error) * jnp.minimum(
+                jnp.abs(td_error), clip_ceiling
+            )
+        else:
+            next_clip_step = state.clip_step
+            new_squared_delta_ema = state.squared_delta_ema
+            clipped_delta = jnp.clip(td_error, -1.0, 1.0)
+
+        if cfg.normalize_delta:
+            next_norm_step = state.norm_step + 1
+            new_absolute_delta_ema = (
+                cfg.beta_norm * state.absolute_delta_ema
+                + (1.0 - cfg.beta_norm) * jnp.abs(clipped_delta)
+            )
+            absolute_delta_unbiased = new_absolute_delta_ema / (
+                1.0 - cfg.beta_norm**next_norm_step
+            )
+            safe_delta = clipped_delta / jnp.maximum(absolute_delta_unbiased, 1e-12)
+        else:
+            next_norm_step = state.norm_step
+            new_absolute_delta_ema = state.absolute_delta_ema
+            safe_delta = clipped_delta
+
+        scale = safe_delta * step_size
+        updates = jax.tree.map(
+            lambda t, m: (broadcast(scale, t) * t / m).mean(axis=0),
+            trace,
+            preconditioner,
+        )
+
+        new_state = ImplicitState(
+            second_moment=new_second_moment,
+            sigma=new_sigma,
+            squared_delta_ema=new_squared_delta_ema,
+            absolute_delta_ema=new_absolute_delta_ema,
+            clip_step=next_clip_step,
+            norm_step=next_norm_step,
+            step=next_step,
+        )
         lox.log(
             {
                 f"{self.name}/step_size": step_size.mean(),
                 f"{self.name}/curvature": curvature.mean(),
                 f"{self.name}/denominator": denominator.mean(),
+                f"{self.name}/baseline": baseline.mean(),
+                f"{self.name}/sigma": new_sigma.mean(),
                 f"{self.name}/safe_delta": safe_delta.mean(),
                 f"{self.name}/update_norm": optax.global_norm(updates),
             }
         )
-
-        return updates, state
+        return updates, new_state

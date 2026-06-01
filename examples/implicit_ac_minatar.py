@@ -97,7 +97,9 @@ actor_optimizer = ObGD(
         adaptive=False,
     ),
 )
-critic_optimizer = Implicit(cfg=ImplicitConfig(lr=args.lr))
+critic_optimizer = Implicit(
+    cfg=ImplicitConfig(gamma=0.99, trace_lambda=0.8, eta=args.lr)
+)
 
 agent = ACLambda(
     config,

@@ -117,7 +117,9 @@ def evaluate(value_optimizer):
 
 
 optimizers = {
-    "implicit-TD": Implicit(cfg=ImplicitConfig(lr=1.0)),
+    "implicit-TD": Implicit(
+        cfg=ImplicitConfig(gamma=gamma, trace_lambda=trace_lambda, eta=0.25)
+    ),
     "intentional-TD": Intentional(
         cfg=IntentionalConfig(gamma=gamma, trace_lambda=trace_lambda, eta=0.25)
     ),

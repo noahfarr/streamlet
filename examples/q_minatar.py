@@ -49,7 +49,9 @@ ENV_IDS = [
 # Each entry builds a fresh optimizer instance with its tuned hyperparameters.
 OPTIMIZERS = {
     "measured": lambda: Measured(cfg=MeasuredConfig(eta=0.5)),
-    "implicit": lambda: Implicit(cfg=ImplicitConfig(lr=0.0001)),
+    "implicit": lambda: Implicit(
+        cfg=ImplicitConfig(gamma=gamma, trace_lambda=trace_lambda, eta=0.25)
+    ),
     "intentional": lambda: Intentional(
         cfg=IntentionalConfig(gamma=gamma, trace_lambda=trace_lambda, eta=0.25)
     ),

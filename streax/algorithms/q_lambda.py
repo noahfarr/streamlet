@@ -170,9 +170,9 @@ class QLambda:
         ):
             # The interaction must use the same preconditioned trace direction
             # P z that the optimizer's update applies, so X = (g - gamma g')(P z).
-            # Implicit has no preconditioner; Measured optionally applies one.
+            # Measured and Implicit optionally apply an RMSProp preconditioner.
             interaction_trace = q_trace
-            if isinstance(self.q_optimizer, Measured):
+            if isinstance(self.q_optimizer, (Measured, Implicit)):
                 interaction_trace = self.q_optimizer.precondition(
                     state.q_optimizer_state, q_trace
                 )

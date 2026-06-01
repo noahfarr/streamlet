@@ -155,9 +155,20 @@ class SARSALambda:
         if isinstance(self.q_optimizer, Implicit) or (
             isinstance(self.q_optimizer, ObGD) and self.q_optimizer.cfg.exact
         ):
+            # The interaction must use the same preconditioned trace direction
+            # P z that the optimizer's update applies; Implicit optionally
+            # applies an RMSProp preconditioner.
+            interaction_trace = q_trace
+            if isinstance(self.q_optimizer, Implicit):
+                interaction_trace = self.q_optimizer.precondition(
+                    state.q_optimizer_state, q_trace
+                )
+
             gradient_trace = sum(
                 jnp.sum(g * z, axis=tuple(range(1, g.ndim)))
-                for g, z in zip(jax.tree.leaves(q_grads), jax.tree.leaves(q_trace))
+                for g, z in zip(
+                    jax.tree.leaves(q_grads), jax.tree.leaves(interaction_trace)
+                )
             )
 
             def bootstrap_value(params, obs, a):
@@ -172,7 +183,7 @@ class SARSALambda:
                 return jvp_value
 
             next_grad_trace = jax.vmap(directional)(
-                transition.second.obs, next_action, q_trace
+                transition.second.obs, next_action, interaction_trace
             )
             curvature = gradient_trace - self.cfg.gamma * (
                 1.0 - transition.second.done.astype(jnp.float32)
