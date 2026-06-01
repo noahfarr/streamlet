@@ -183,7 +183,7 @@ if args.wandb:
     loggers.append(
         WandbLogger(
             project="stremax",
-            name="stream-recurrent-Q",
+            name="recurrent-stream-Q",
             mode="online",
             group=group,
             cfg={
