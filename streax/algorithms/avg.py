@@ -34,8 +34,7 @@ class AVGConfig:
 class AVGState:
     step: int
     update_step: int
-    obs: Array
-    done: Array
+    timestep: Timestep
     env_state: EnvState
     actor_params: core.FrozenDict[str, Any]
     actor_optimizer_state: PyTree
@@ -66,13 +65,13 @@ class AVG:
     ) -> tuple[Array, Array]:
         keys = jax.random.split(key, self.cfg.num_envs)
         return jax.vmap(self._sample_action, in_axes=(None, 0, 0))(
-            state.actor_params, state.obs, keys
+            state.actor_params, state.timestep.obs, keys
         )
 
     def _deterministic_action(
         self, key: Key, state: AVGState
     ) -> tuple[Array, Array]:
-        dist = self.actor_network.apply(state.actor_params, state.obs)
+        dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
         action = dist.bijector.forward(dist.distribution.mode())
         log_prob = dist.log_prob(action)
         return action, log_prob
@@ -91,7 +90,7 @@ class AVG:
         done = jnp.asarray(done, dtype=jnp.bool_)
 
         transition = Transition(
-            first=Timestep(obs=state.obs, done=state.done),
+            first=state.timestep,
             second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
             aux={"log_prob": log_prob},
         )
@@ -99,8 +98,14 @@ class AVG:
         return (
             state.replace(
                 step=state.step + self.cfg.num_envs,
-                obs=next_obs,
-                done=done,
+                timestep=Timestep(
+                    obs=next_obs,
+                    action=jnp.where(
+                        broadcast(done, action), jnp.zeros_like(action), action
+                    ),
+                    reward=jnp.where(done, jnp.zeros_like(reward), reward),
+                    done=done,
+                ),
                 env_state=env_state,
             ),
             transition,
@@ -113,7 +118,7 @@ class AVG:
         action_keys = jax.random.split(sample_key, self.cfg.num_envs)
 
         action, log_prob = jax.vmap(self._sample_action, in_axes=(None, 0, 0))(
-            state.actor_params, state.obs, action_keys
+            state.actor_params, state.timestep.obs, action_keys
         )
         action = jax.lax.stop_gradient(action)
         log_prob = jax.lax.stop_gradient(log_prob)
@@ -142,7 +147,7 @@ class AVG:
         sigma = td_scaler.sigma()
 
         q = self.critic_network.apply(
-            jax.lax.stop_gradient(state.critic_params), state.obs, action
+            jax.lax.stop_gradient(state.critic_params), state.timestep.obs, action
         )
         td_error = (reward + not_done * self.cfg.gamma * target_v - q) / sigma
 
@@ -156,7 +161,7 @@ class AVG:
 
         actor_losses, actor_grads = jax.vmap(
             jax.value_and_grad(compute_actor_loss), in_axes=(None, 0, 0)
-        )(state.actor_params, state.obs, action_keys)
+        )(state.actor_params, state.timestep.obs, action_keys)
         actor_ascent = jax.tree.map(jnp.negative, actor_grads)
         actor_td_error = jnp.ones((self.cfg.num_envs,), dtype=jnp.float32)
         actor_updates, actor_optimizer_state = self.actor_optimizer.update(
@@ -170,11 +175,11 @@ class AVG:
             return self.critic_network.apply(params, obs, action)
 
         q_grads = jax.vmap(jax.grad(compute_q_value), in_axes=(None, 0, 0))(
-            state.critic_params, state.obs, action
+            state.critic_params, state.timestep.obs, action
         )
 
         trace_decay = self.cfg.gamma * self.cfg.trace_lambda
-        keep = trace_decay * (1.0 - state.done.astype(jnp.float32))
+        keep = trace_decay * (1.0 - state.timestep.done.astype(jnp.float32))
         critic_trace = jax.tree.map(
             lambda t, g: broadcast(keep, t) * t + g, state.critic_trace, q_grads
         )
@@ -205,8 +210,14 @@ class AVG:
             state.replace(
                 step=state.step + self.cfg.num_envs,
                 update_step=state.update_step + 1,
-                obs=next_obs,
-                done=done,
+                timestep=Timestep(
+                    obs=next_obs,
+                    action=jnp.where(
+                        broadcast(done, action), jnp.zeros_like(action), action
+                    ),
+                    reward=jnp.where(done, jnp.zeros_like(reward), reward),
+                    done=done,
+                ),
                 env_state=env_state,
                 actor_params=actor_params,
                 actor_optimizer_state=actor_optimizer_state,
@@ -228,7 +239,9 @@ class AVG:
         action = jnp.zeros(
             (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
         )
+        reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
         done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
+        timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
 
         actor_params = self.actor_network.init(actor_key, obs)
         critic_params = self.critic_network.init(critic_key, obs, action)
@@ -248,8 +261,7 @@ class AVG:
         return AVGState(
             step=0,
             update_step=0,
-            obs=obs,
-            done=done,
+            timestep=timestep,
             env_state=env_state,
             actor_params=actor_params,
             actor_optimizer_state=actor_optimizer_state,
@@ -281,8 +293,19 @@ class AVG:
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             reset_keys, self.env_params
         )
-        done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
-        state = state.replace(step=0, obs=obs, done=done, env_state=env_state)
+        action_space = self.env.action_space(self.env_params)
+        state = state.replace(
+            step=0,
+            timestep=Timestep(
+                obs=obs,
+                action=jnp.zeros(
+                    (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
+                ),
+                reward=jnp.zeros(self.cfg.num_envs),
+                done=jnp.ones(self.cfg.num_envs, dtype=jnp.bool_),
+            ),
+            env_state=env_state,
+        )
 
         policy = (
             self._deterministic_action if deterministic else self._stochastic_action
