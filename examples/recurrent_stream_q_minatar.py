@@ -16,7 +16,7 @@ from streax.environments.wrappers import (
     StickyActionWrapper,
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from streax.networks import Flatten, sparse
+from streax.networks import Flatten, RecurrentSequential, sparse
 from streax.optimizers import ObGD, ObGDConfig
 
 parser = argparse.ArgumentParser()
@@ -77,56 +77,47 @@ config = RecurrentQLambdaConfig(
 )
 
 
-class RecurrentQNetwork(nn.Module):
-    """A GRU-backed recurrent Q-network following the algorithm's contract.
-
-    The call signature is ``(carry, obs, action, reward, done) -> (carry, q)``:
-    observation, previous action, reward and done all condition the recurrent
-    core (R2D2-style). Any flax ``RNNCellBase`` cell works; here we use a stock
-    ``nn.GRUCell``. The user owns this module entirely — the algorithm only
-    threads the carry through it.
-    """
-
-    num_actions: int
-    hidden_size: int = 128
-
-    @nn.compact
-    def __call__(self, carry, obs, action, reward, done):
-        sparse_init = sparse(sparsity=0.9)
-        x = nn.Conv(
-            16, (3, 3), strides=(1, 1), padding="VALID", kernel_init=sparse_init
-        )(obs)
-        x = nn.LayerNorm()(x)
-        x = nn.leaky_relu(x)
-        x = Flatten(start_dim=-3)(x)
-        x = nn.Dense(128, kernel_init=sparse_init)(x)
-        x = nn.LayerNorm()(x)
-        x = nn.leaky_relu(x)
-
-        # Condition the recurrent core on the previous action, reward and done.
-        context = jnp.concatenate(
-            [
-                jax.nn.one_hot(action, self.num_actions),
-                reward[..., None],
-                done[..., None].astype(jnp.float32),
-            ],
-            axis=-1,
-        )
-        x = jnp.concatenate([x, context], axis=-1)
-
-        carry, hidden = nn.GRUCell(features=self.hidden_size)(carry, x)
-        q_values = nn.Dense(self.num_actions, kernel_init=sparse_init)(hidden)
-        return carry, q_values
-
-    @nn.nowrap
-    def initialize_carry(self, rng, num_envs):
-        return nn.GRUCell(features=self.hidden_size).initialize_carry(
-            rng, (num_envs, 1)
-        )
+sparse_init = sparse(sparsity=0.9)
 
 
-q_network = RecurrentQNetwork(
-    num_actions=num_actions, hidden_size=args.hidden_size
+def encoder(x):
+    # Convolutional torso. A function rather than a Sequential instance so its
+    # layers are created inside RecurrentSequential's scope when the first lambda
+    # calls it (a pre-built module instance can't be bound through a closure).
+    x = nn.Conv(16, (3, 3), strides=(1, 1), padding="VALID", kernel_init=sparse_init)(x)
+    x = nn.LayerNorm()(x)
+    x = nn.leaky_relu(x)
+    x = Flatten(start_dim=-3)(x)
+    x = nn.Dense(128, kernel_init=sparse_init)(x)
+    x = nn.LayerNorm()(x)
+    x = nn.leaky_relu(x)
+    return x
+
+# A GRU-backed recurrent Q-network written purely as layers. RecurrentSequential
+# is an nn.Sequential that also exposes initialize_carry (taken from the GRU
+# cell), satisfying the recurrent algorithm's contract:
+#   (carry, obs, action, reward, done) -> (carry, q)
+# Observation, previous action, reward and done all condition the core (R2D2).
+q_network = RecurrentSequential(
+    [
+        lambda carry, obs, action, reward, done: (
+            carry,
+            jnp.concatenate(
+                [
+                    encoder(obs),
+                    jax.nn.one_hot(action, num_actions),
+                    reward[..., None],
+                    done[..., None].astype(jnp.float32),
+                ],
+                axis=-1,
+            ),
+        ),
+        nn.GRUCell(features=args.hidden_size),
+        lambda carry, hidden: (
+            carry,
+            nn.Dense(num_actions, kernel_init=sparse_init)(hidden),
+        ),
+    ]
 )
 
 lr = args.lr if args.lr is not None else (1e-3 if args.exact else 1.0)
