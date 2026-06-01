@@ -18,6 +18,7 @@ from streax.environments.wrappers import (
     RecordEpisodeStatistics,
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
+from streax.networks import L2Normalize
 from streax.optimizers import OptaxOptimizer
 
 parser = argparse.ArgumentParser()
@@ -66,10 +67,6 @@ env = NormalizeRewardWrapper(env, gamma=gamma)
 action_dim = env.action_space(env_params).shape[0]
 
 
-def l2_normalize(x: jax.Array, eps: float = 1e-12) -> jax.Array:
-    return x / jnp.maximum(jnp.linalg.norm(x, axis=-1, keepdims=True), eps)
-
-
 config = AVGConfig(
     num_envs=1,
     gamma=gamma,
@@ -86,7 +83,7 @@ actor_network = nn.Sequential(
         nn.leaky_relu,
         nn.Dense(n_hid, kernel_init=orthogonal(), bias_init=zeros),
         nn.leaky_relu,
-        l2_normalize,
+        L2Normalize(),
         nn.Dense(2 * action_dim, kernel_init=orthogonal()),
         lambda out: distrax.Transformed(
             distrax.MultivariateNormalDiag(
@@ -114,7 +111,7 @@ critic_network = nn.Sequential(
             ),
             action,
         ),
-        lambda features, action: (l2_normalize(features), action),
+        lambda features, action: (L2Normalize()(features), action),
         lambda features, action: jnp.concatenate([features, action], axis=-1),
         nn.Dense(1, kernel_init=orthogonal()),
         lambda q_value: jnp.squeeze(q_value, axis=-1),
