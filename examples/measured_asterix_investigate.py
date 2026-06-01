@@ -79,7 +79,7 @@ def make_env():
 
 def make_network(num_actions):
     sparse_init = sparse(sparsity=0.9)
-    backbone = nn.Sequential(
+    return nn.Sequential(
         [
             nn.Conv(
                 16, (3, 3), strides=(1, 1), padding="VALID", kernel_init=sparse_init
@@ -90,10 +90,8 @@ def make_network(num_actions):
             nn.Dense(128, kernel_init=sparse_init),
             nn.LayerNorm(),
             nn.leaky_relu,
+            nn.Dense(num_actions, kernel_init=sparse_init),
         ]
-    )
-    return nn.Sequential(
-        [backbone, nn.Dense(num_actions, kernel_init=sparse_init)]
     )
 
 

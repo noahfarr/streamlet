@@ -78,28 +78,6 @@ def feature_extractor(x: jax.Array) -> jax.Array:
     return l2_normalize(x)
 
 
-class Actor(nn.Module):
-    action_dim: int
-
-    @nn.compact
-    def __call__(self, obs: jax.Array) -> object:
-        features = feature_extractor(obs)
-        mean = nn.Dense(self.action_dim, kernel_init=orthogonal())(features)
-        log_std = nn.Dense(self.action_dim, kernel_init=orthogonal())(features)
-        log_std = jnp.clip(log_std, -20.0, 2.0)
-        base = distrax.MultivariateNormalDiag(loc=mean, scale_diag=jnp.exp(log_std))
-        return distrax.Transformed(base, distrax.Block(distrax.Tanh(), ndims=1))
-
-
-class Critic(nn.Module):
-    @nn.compact
-    def __call__(self, obs: jax.Array, action: jax.Array) -> jax.Array:
-        features = feature_extractor(jnp.concatenate([obs, action], axis=-1))
-        x = jnp.concatenate([features, action], axis=-1)
-        q_value = nn.Dense(1, kernel_init=orthogonal())(x)
-        return jnp.squeeze(q_value, axis=-1)
-
-
 config = AVGConfig(
     num_envs=1,
     gamma=gamma,
@@ -107,8 +85,34 @@ config = AVGConfig(
     trace_lambda=0.0,
 )
 
-actor_network = Actor(action_dim=action_dim)
-critic_network = Critic()
+# nn.Sequential passes *args to the first layer and unpacks tuple returns into
+# the next, so the multi-input critic and the action-threading both work without
+# a custom module. The actor's mean/log_std heads fold into one Dense(2*dim).
+actor_network = nn.Sequential(
+    [
+        feature_extractor,
+        nn.Dense(2 * action_dim, kernel_init=orthogonal()),
+        lambda out: distrax.Transformed(
+            distrax.MultivariateNormalDiag(
+                loc=out[..., :action_dim],
+                scale_diag=jnp.exp(jnp.clip(out[..., action_dim:], -20.0, 2.0)),
+            ),
+            distrax.Block(distrax.Tanh(), ndims=1),
+        ),
+    ]
+)
+
+critic_network = nn.Sequential(
+    [
+        lambda obs, action: (
+            feature_extractor(jnp.concatenate([obs, action], axis=-1)),
+            action,
+        ),
+        lambda features, action: jnp.concatenate([features, action], axis=-1),
+        nn.Dense(1, kernel_init=orthogonal()),
+        lambda q_value: jnp.squeeze(q_value, axis=-1),
+    ]
+)
 
 actor_optimizer = OptaxOptimizer(optax.adam(actor_lr, b1=beta1, b2=beta2, eps=eps))
 critic_optimizer = OptaxOptimizer(optax.adam(critic_lr, b1=beta1, b2=beta2, eps=eps))

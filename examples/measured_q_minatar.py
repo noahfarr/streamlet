@@ -99,7 +99,7 @@ config = QLambdaConfig(
 )
 
 sparse_init = sparse(sparsity=0.9)
-network = nn.Sequential(
+q_network = nn.Sequential(
     [
         nn.Conv(16, (3, 3), strides=(1, 1), padding="VALID", kernel_init=sparse_init),
         nn.LayerNorm(),
@@ -108,12 +108,6 @@ network = nn.Sequential(
         nn.Dense(128, kernel_init=sparse_init),
         nn.LayerNorm(),
         nn.leaky_relu,
-    ]
-)
-
-q_network = nn.Sequential(
-    [
-        network,
         nn.Dense(num_actions, kernel_init=sparse_init),
     ]
 )
