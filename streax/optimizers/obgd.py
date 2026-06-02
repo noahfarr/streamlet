@@ -64,7 +64,7 @@ class ObGD:
                 raise ValueError(
                     "ObGD(exact=True) requires the curvature term "
                     "z^T(grad_v(x) - gamma grad_v(x')); route this optimizer through "
-                    "the algorithm's curvature branch, as Implicit/Measured are."
+                    "the algorithm's curvature branch, as Implicit/Calibrated are."
                 )
 
         if cfg.adaptive:

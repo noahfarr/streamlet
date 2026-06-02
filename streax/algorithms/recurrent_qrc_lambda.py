@@ -131,7 +131,6 @@ class RecurrentQRCLambda:
     ) -> tuple[RecurrentQRCLambdaState, Transition]:
         action_key, step_key = jax.random.split(key)
 
-        # Advance both recurrent cores through the current observation.
         q_carry_next, q_values = self._q_apply(
             state.q_params, state.q_carry, state.timestep
         )

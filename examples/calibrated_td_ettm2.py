@@ -16,7 +16,7 @@ from streax.environments.wrappers import (
     RecordEpisodeStatistics,
 )
 from streax.networks import sparse
-from streax.optimizers import Measured, MeasuredConfig
+from streax.optimizers import Calibrated, CalibratedConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -31,22 +31,16 @@ parser.add_argument(
     help="ETT dataset to train on.",
 )
 parser.add_argument(
-    "--eta",
-    type=float,
-    default=0.5,
-    help="Measured step-size scale (no base learning rate; eta multiplies the variance-optimal step).",
-)
-parser.add_argument(
     "--nu",
     type=float,
     default=0.01,
-    help="Target-variance weight on E[delta^2 ||z||^2] in the Measured denominator.",
+    help="Target-variance weight on E[delta^2 ||z||^2] in the Calibrated denominator.",
 )
 parser.add_argument(
     "--beta",
     type=float,
     default=0.999,
-    help="EMA decay for the Measured moment estimates and the observation traces.",
+    help="EMA decay for the Calibrated moment estimates and the observation traces.",
 )
 args = parser.parse_args()
 
@@ -57,7 +51,6 @@ env_id = args.env_id
 
 gamma = 0.99
 trace_lambda = 0.8
-eta = args.eta
 nu = args.nu
 beta = args.beta
 
@@ -88,7 +81,7 @@ def value_network():
 
 env, env_params = build_env()
 config = TDLambdaConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
-value_optimizer = Measured(cfg=MeasuredConfig(eta=eta, nu=nu, beta=beta))
+value_optimizer = Calibrated(cfg=CalibratedConfig(nu=nu, beta=beta))
 agent = TDLambda(config, env, env_params, value_network(), value_optimizer)
 
 init = jax.vmap(agent.init)
@@ -112,7 +105,7 @@ for t in reversed(range(total_steps)):
     return_t = return_t * gamma + cumulants[:, t]
     actual_returns[:, t] = return_t
 
-plot_dir = Path("plots") / env_id / "measured-TD"
+plot_dir = Path("plots") / env_id / "calibrated-TD"
 plot_dir.mkdir(parents=True, exist_ok=True)
 
 

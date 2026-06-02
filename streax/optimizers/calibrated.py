@@ -11,20 +11,8 @@ from streax.utils import broadcast
 from streax.utils.typing import Array, PyTree
 
 
-class MeasuredMode(enum.Enum):
-    OPERATOR = "operator"
-    FROBENIUS = "frobenius"
-
-
-class NuMode(enum.Enum):
-    FIXED = "fixed"
-    TRACE = "trace"
-    SNR = "snr"
-
-
 @struct.dataclass(frozen=True)
-class MeasuredConfig:
-    eta: float = 1.0
+class CalibratedConfig:
     beta: float = 0.999
     eps: float = 1e-8
     nu: float = 1.0
@@ -33,27 +21,27 @@ class MeasuredConfig:
     huber_delta: float = 1.0
     precondition: bool = struct.field(pytree_node=False, default=False)
     beta2: float = 0.999
-    mode: MeasuredMode = struct.field(pytree_node=False, default=MeasuredMode.OPERATOR)
-    nu_mode: NuMode = struct.field(pytree_node=False, default=NuMode.FIXED)
+    adaptive_clip: bool = struct.field(pytree_node=False, default=False)
+    clip_multiplier: float = 20.0
+    beta_clip: float = 0.999
 
 
 @struct.dataclass(frozen=True)
-class MeasuredState:
+class CalibratedState:
     m_hat: Array
     s_hat: Array
     y_hat: Array
     v: PyTree = None
-    t_hat: Array = None
-    u_hat: PyTree = None
-    count: Array = None
+    d_hat: Array = None
+    step: Array = None
 
 
 @dataclass
-class Measured:
-    cfg: MeasuredConfig
-    name: str = "measured"
+class Calibrated:
+    cfg: CalibratedConfig
+    name: str = "calibrated"
 
-    def init(self, parameters: PyTree, num_envs: int) -> MeasuredState:
+    def init(self, parameters: PyTree, num_envs: int) -> CalibratedState:
         m_hat = s_hat = y_hat = jnp.zeros((num_envs,), dtype=jnp.float32)
         v = None
         if self.cfg.precondition:
@@ -61,28 +49,20 @@ class Measured:
                 lambda p: jnp.ones((num_envs, *p.shape), dtype=jnp.float32),
                 parameters,
             )
-        t_hat = None
-        if self.cfg.nu_mode is NuMode.TRACE:
-            t_hat = jnp.ones((num_envs,), dtype=jnp.float32)
-        u_hat = None
-        count = None
-        if self.cfg.nu_mode is NuMode.SNR:
-            u_hat = jax.tree.map(
-                lambda p: jnp.zeros((num_envs, *p.shape), dtype=jnp.float32),
-                parameters,
-            )
-            count = jnp.zeros((), dtype=jnp.float32)
-        return MeasuredState(
+        d_hat = None
+        if self.cfg.adaptive_clip:
+            d_hat = jnp.ones((num_envs,), dtype=jnp.float32)
+        step = jnp.zeros((), dtype=jnp.float32)
+        return CalibratedState(
             m_hat=m_hat,
             s_hat=s_hat,
             y_hat=y_hat,
             v=v,
-            t_hat=t_hat,
-            u_hat=u_hat,
-            count=count,
+            d_hat=d_hat,
+            step=step,
         )
 
-    def precondition(self, state: MeasuredState, trace: PyTree) -> PyTree:
+    def precondition(self, state: CalibratedState, trace: PyTree) -> PyTree:
         if not self.cfg.precondition:
             return trace
         return jax.tree.map(
@@ -91,15 +71,24 @@ class Measured:
 
     def update(
         self,
-        state: MeasuredState,
+        state: CalibratedState,
         gradient: PyTree,
         trace: PyTree,
         td_error: Array,
         interaction: Array,
-        squared_grad_norm: Array = None,
-    ) -> tuple[PyTree, MeasuredState]:
+    ) -> tuple[PyTree, CalibratedState]:
 
-        if self.cfg.huber:
+        step = state.step + 1.0
+        d_hat = state.d_hat
+        if self.cfg.adaptive_clip:
+            d_hat = self.cfg.beta_clip * state.d_hat + (1.0 - self.cfg.beta_clip) * (
+                td_error * td_error
+            )
+            ceiling = self.cfg.clip_multiplier * jnp.sqrt(
+                d_hat / (1.0 - self.cfg.beta_clip**step)
+            )
+            td_error = jnp.sign(td_error) * jnp.minimum(jnp.abs(td_error), ceiling)
+        elif self.cfg.huber:
             td_error = jnp.clip(td_error, -self.cfg.huber_delta, self.cfg.huber_delta)
 
         direction = self.precondition(state, trace)
@@ -112,23 +101,10 @@ class Measured:
 
         y_t = jnp.square(td_error) * squared_z_norm
 
-        if self.cfg.nu_mode is NuMode.TRACE:
-            nu = 1.0 / (state.t_hat + self.cfg.eps)
-        elif self.cfg.nu_mode is NuMode.SNR:
-            mean_update_sq = jax.tree_util.tree_reduce(
-                jnp.add, jax.tree.map(squared_norm, state.u_hat)
-            )
-            count = state.count + 1.0
-            correction = 1.0 - self.cfg.beta**count
-            snr = correction * state.y_hat / (mean_update_sq + self.cfg.eps)
-            nu = self.cfg.nu * snr
-        else:
-            nu = self.cfg.nu
+        nu = self.cfg.nu
 
-        alpha = (
-            self.cfg.eta
-            * jnp.maximum(0.0, state.m_hat)
-            / (state.s_hat + nu * state.y_hat + self.cfg.eps)
+        alpha = jnp.maximum(0.0, state.m_hat) / (
+            state.s_hat + nu * state.y_hat + self.cfg.eps
         )
         alpha = jnp.minimum(alpha, self.cfg.alpha_max)
 
@@ -141,10 +117,7 @@ class Measured:
 
         updates = jax.tree.map(compute_update, direction)
 
-        if self.cfg.mode is MeasuredMode.FROBENIUS:
-            second_moment = squared_grad_norm * squared_z_norm
-        else:
-            second_moment = jnp.square(interaction)
+        second_moment = jnp.square(interaction)
 
         m_hat = self.cfg.beta * state.m_hat + (1.0 - self.cfg.beta) * interaction
         s_hat = self.cfg.beta * state.s_hat + (1.0 - self.cfg.beta) * second_moment
@@ -157,30 +130,6 @@ class Measured:
                 state.v,
                 gradient,
             )
-
-        t_hat = state.t_hat
-        if self.cfg.nu_mode is NuMode.TRACE:
-            alpha_bar = jnp.maximum(0.0, state.m_hat) / (state.s_hat + self.cfg.eps)
-            contraction = (
-                1.0
-                - 2.0 * alpha_bar * state.m_hat
-                + jnp.square(alpha_bar) * state.s_hat
-            )
-            t_hat = jnp.maximum(
-                state.t_hat * contraction + jnp.square(alpha_bar) * state.y_hat,
-                self.cfg.eps,
-            )
-
-        u_hat = state.u_hat
-        count = state.count
-        if self.cfg.nu_mode is NuMode.SNR:
-            u_hat = jax.tree.map(
-                lambda u, d: self.cfg.beta * u
-                + (1.0 - self.cfg.beta) * broadcast(td_error, d) * d,
-                state.u_hat,
-                direction,
-            )
-            count = state.count + 1.0
 
         lox.log(
             {
@@ -196,15 +145,15 @@ class Measured:
                     s_hat / (jnp.square(m_hat) + self.cfg.eps) - 1.0
                 ).mean(),
                 f"{self.name}/update_norm": optax.global_norm(updates),
+                f"{self.name}/absolute_td_error": jnp.abs(td_error).mean(),
             }
         )
 
-        return updates, MeasuredState(
+        return updates, CalibratedState(
             m_hat=m_hat,
             s_hat=s_hat,
             y_hat=y_hat,
             v=v,
-            t_hat=t_hat,
-            u_hat=u_hat,
-            count=count,
+            d_hat=d_hat,
+            step=step,
         )

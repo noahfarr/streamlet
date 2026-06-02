@@ -17,7 +17,7 @@ from streax.environments.wrappers import (
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from streax.networks import Flatten, sparse
-from streax.optimizers import Measured, MeasuredConfig, MeasuredMode, NuMode
+from streax.optimizers import Calibrated, CalibratedConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -33,12 +33,6 @@ parser.add_argument(
         "gymnax::SpaceInvaders-MinAtar",
     ],
     help="MinAtar environment to train on.",
-)
-parser.add_argument(
-    "--eta",
-    type=float,
-    default=0.5,
-    help="Measured step-size scale (no base learning rate; eta multiplies the variance-optimal step).",
 )
 parser.add_argument(
     "--precondition",
@@ -59,18 +53,10 @@ parser.add_argument(
     help="Weight on the target-variance term E[delta^2 ||z||^2] in the denominator.",
 )
 parser.add_argument(
-    "--mode",
-    default="operator",
-    choices=["operator", "frobenius"],
-    help="Denominator second moment: operator isotropy E[X^2] or Frobenius "
-    "E[||z||^2 ||g - gamma g'||^2].",
-)
-parser.add_argument(
-    "--nu-mode",
-    default="fixed",
-    choices=["fixed", "trace", "snr"],
-    help="How nu is set: fixed (--nu), trace (1/tr(M) recursion, ~rho=1), or "
-    "snr (nu = nu0 * E||dz||^2 / ||E[dz]||^2, anneals with proximity).",
+    "--beta",
+    type=float,
+    default=0.999,
+    help="EMA decay for the moment estimates in the denominator.",
 )
 args = parser.parse_args()
 
@@ -112,14 +98,12 @@ q_network = nn.Sequential(
     ]
 )
 
-q_optimizer = Measured(
-    cfg=MeasuredConfig(
-        eta=args.eta,
+q_optimizer = Calibrated(
+    cfg=CalibratedConfig(
         precondition=args.precondition,
         huber=args.huber,
         nu=args.nu,
-        mode=MeasuredMode(args.mode),
-        nu_mode=NuMode(args.nu_mode),
+        beta=args.beta,
     )
 )
 
@@ -147,7 +131,7 @@ agent = QLambda(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"q_lambda__{env_id}__measured"
+group = f"q_lambda__{env_id}__calibrated"
 
 loggers = [
     DashboardLogger(
@@ -163,7 +147,7 @@ if args.wandb:
     loggers.append(
         WandbLogger(
             project="stremax",
-            name="measured-Q",
+            name="calibrated-Q",
             mode="online",
             group=group,
             cfg={

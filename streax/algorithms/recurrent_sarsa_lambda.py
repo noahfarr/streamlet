@@ -53,9 +53,6 @@ class RecurrentSARSALambda:
     def _apply(
         self, params: PyTree, carry: PyTree, timestep: Timestep
     ) -> tuple[PyTree, Array]:
-        # The recurrent network receives observation, action, reward and done as
-        # separate positional arguments; it returns the advanced carry and the
-        # per-action q-values.
         return self.q_network.apply(
             params,
             carry,
@@ -96,8 +93,6 @@ class RecurrentSARSALambda:
 
         action = state.next_action
 
-        # Advance the carry through the current observation (the action that led
-        # here is already stored in state.timestep).
         carry_after_first, _ = self._apply(
             state.q_params, state.carry, state.timestep
         )
@@ -111,8 +106,6 @@ class RecurrentSARSALambda:
 
         second = Timestep(obs=next_obs, action=action, reward=reward, done=done)
 
-        # The carry feeding the next observation resets on episode boundaries
-        # (next_obs is already the new episode's first observation on done).
         carry_next = self._reset_carry(carry_after_first, done)
         carry_after_second, next_q_values = self._apply(
             state.q_params, carry_next, second
@@ -273,8 +266,6 @@ class RecurrentSARSALambda:
             q_params,
         )
 
-        # The initial carry pairs with the initial observation; pick the first
-        # action from its q-values without advancing the stored carry.
         _, q_values = self._apply(q_params, carry, timestep)
         next_action = self._sample_action(action_key, q_values, jnp.int32(0))
 

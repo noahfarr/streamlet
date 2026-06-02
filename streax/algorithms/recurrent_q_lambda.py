@@ -9,7 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
-from streax.optimizers import Implicit, Measured, MeasuredMode, ObGD, Optimizer
+from streax.optimizers import Calibrated, Implicit, ObGD, Optimizer
 from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
 from streax.utils.typing import (
     Array,
@@ -53,9 +53,6 @@ class RecurrentQLambda:
     def _apply(
         self, params: PyTree, carry: PyTree, timestep: Timestep
     ) -> tuple[PyTree, Array]:
-        # The recurrent network receives observation, action, reward and done as
-        # separate positional arguments (R2D2-style conditioning); it returns the
-        # advanced carry and the per-action q-values.
         return self.q_network.apply(
             params,
             carry,
@@ -113,9 +110,6 @@ class RecurrentQLambda:
     ) -> tuple[RecurrentQLambdaState, Transition]:
         action_key, step_key = jax.random.split(key)
 
-        # Single forward pass: advance the carry and pick the action from the same
-        # pre-update params, so carry_in / carry_next stay consistent with the
-        # action stored in the transition.
         carry_next, q_values = self._apply(state.q_params, state.carry, state.timestep)
         state, action, non_greedy = policy(action_key, state, q_values)
 
@@ -145,7 +139,6 @@ class RecurrentQLambda:
                     reward=jnp.where(done, jnp.zeros_like(reward), reward),
                     done=done,
                 ),
-                # The carry resets only on episode boundaries (not on exploration).
                 carry=self._reset_carry(carry_next, done),
                 env_state=env_state,
             ),
@@ -167,8 +160,6 @@ class RecurrentQLambda:
     ) -> RecurrentQLambdaState:
         action = transition.second.action
         non_greedy = transition.aux["non_greedy"]
-        # Carries are captured during `_step` from the same pre-update params, so
-        # they reproduce the forward pass that selected the action.
         carry_in = transition.aux["carry_in"]
         carry_next = transition.aux["carry_next"]
 
@@ -201,14 +192,11 @@ class RecurrentQLambda:
             lambda t, g: broadcast(discount, t) * t + g, state.q_trace, q_grads
         )
 
-        if isinstance(self.q_optimizer, (Implicit, Measured)) or (
+        if isinstance(self.q_optimizer, (Implicit, Calibrated)) or (
             isinstance(self.q_optimizer, ObGD) and self.q_optimizer.cfg.exact
         ):
-            # The interaction must use the same preconditioned trace direction
-            # P z that the optimizer's update applies, so X = (g - gamma g')(P z).
-            # Implicit has no preconditioner; Measured optionally applies one.
             interaction_trace = q_trace
-            if isinstance(self.q_optimizer, Measured):
+            if isinstance(self.q_optimizer, (Calibrated, Implicit)):
                 interaction_trace = self.q_optimizer.precondition(
                     state.q_optimizer_state, q_trace
                 )
@@ -238,36 +226,12 @@ class RecurrentQLambda:
             not_done = 1.0 - transition.second.done.astype(jnp.float32)
             curvature = gradient_trace - self.cfg.gamma * not_done * next_grad_trace
 
-            squared_grad_norm = None
-            if isinstance(self.q_optimizer, Measured) and (
-                self.q_optimizer.cfg.mode is MeasuredMode.FROBENIUS
-            ):
-                _, bootstrap_vjp = jax.vjp(
-                    lambda params: bootstrap_value(
-                        params, carry_next, transition.second
-                    ),
-                    state.q_params,
-                )
-                (next_grads,) = jax.vmap(bootstrap_vjp)(
-                    jnp.eye(batch, dtype=q_values.dtype)
-                )
-                grad_diff = jax.tree.map(
-                    lambda g, gn: g - self.cfg.gamma * broadcast(not_done, gn) * gn,
-                    q_grads,
-                    next_grads,
-                )
-                squared_grad_norm = sum(
-                    jnp.sum(jnp.square(b), axis=tuple(range(1, b.ndim)))
-                    for b in jax.tree.leaves(grad_diff)
-                )
-
             q_updates, q_optimizer_state = self.q_optimizer.update(
                 state.q_optimizer_state,
                 q_grads,
                 q_trace,
                 td_error,
                 curvature,
-                squared_grad_norm,
             )
         else:
             q_updates, q_optimizer_state = self.q_optimizer.update(

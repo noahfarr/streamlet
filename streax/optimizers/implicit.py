@@ -73,9 +73,6 @@ class Implicit:
         )
 
     def precondition(self, state: ImplicitState, trace: PyTree) -> PyTree:
-        # rho z, with rho = (sqrt(v) + eps)^-1 from the PRE-update second moment,
-        # so the interaction c_t the algorithm forms uses the same rho as the
-        # update direction below. No-op when RMSProp preconditioning is off.
         if not self.cfg.use_rmsprop:
             return trace
         return jax.tree.map(
@@ -95,15 +92,11 @@ class Implicit:
         h_value: Array | None = None,
         bias_trace: Array | None = None,
     ) -> tuple[PyTree, ImplicitState]:
-        # squared_grad_norm is the Frobenius term used by Measured; the implicit
-        # closed-loop form does not use it.
         del squared_grad_norm
         qrc = td_error_grad is not None
         cfg = self.cfg
         next_step = state.step + 1
 
-        # Preconditioner from the PRE-update second moment, matching precondition()
-        # (and hence the interaction c_t the algorithm passes in).
         if cfg.use_rmsprop:
             preconditioner = jax.tree.map(
                 lambda v: jnp.sqrt(v) + cfg.eps, state.second_moment
@@ -117,7 +110,6 @@ class Implicit:
             gradient,
         )
 
-        # <g, rho g> and <z, rho z>, with rho = 1 / preconditioner.
         squared_gradient_norm = sum(
             jnp.sum(jnp.square(g) / m, axis=tuple(range(1, g.ndim)))
             for g, m in zip(jax.tree.leaves(gradient), jax.tree.leaves(preconditioner))
@@ -138,8 +130,6 @@ class Implicit:
             new_sigma = state.sigma
             baseline = squared_trace_norm
 
-        # Closed-loop denominator: sqrt(sigma_bar <z, rho z>) + eta * c_t, floored
-        # at kappa * baseline so a negative interaction cannot flip it.
         denominator = baseline + cfg.eta * curvature
         denominator = jnp.maximum(denominator, cfg.kappa * baseline)
         step_size = cfg.eta / jnp.maximum(denominator, cfg.eps)

@@ -2,7 +2,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-from streax.optimizers import Measured, MeasuredConfig
+from streax.optimizers import Calibrated, CalibratedConfig
 
 
 class MLP(nn.Module):
@@ -82,24 +82,21 @@ def test_jvp_matches_reverse_mode_q_max():
     assert jnp.allclose(x_jvp, x_explicit, atol=1e-5, rtol=1e-5)
 
 
-def measured_alpha(cfg, state):
+def calibrated_alpha(cfg, state):
     # Mirror the step size the optimizer applies: the variance-optimal step of
-    # Eq. (7), eta * max(0, E[X]) / (E[X^2] + nu * E[delta^2 ||z||^2]), capped at 1.
-    alpha = (
-        cfg.eta
-        * jnp.maximum(state.m_hat, 0.0)
-        / (state.s_hat + cfg.nu * state.y_hat + cfg.eps)
+    # Eq. (7), max(0, E[X]) / (E[X^2] + nu * E[delta^2 ||z||^2]), capped at 1.
+    alpha = jnp.maximum(state.m_hat, 0.0) / (
+        state.s_hat + cfg.nu * state.y_hat + cfg.eps
     )
     return jnp.minimum(alpha, cfg.alpha_max)
 
 
 def test_alpha_converges_to_first_over_second_moment():
     # With a zero TD error the noise term nu * E[delta^2 ||z||^2] vanishes, so
-    # the step must converge to the noise-free optimum eta * E[X] / E[X^2].
-    eta = 0.5
+    # the step must converge to the noise-free optimum E[X] / E[X^2].
     x = 2.0
-    cfg = MeasuredConfig(eta=eta, beta=0.05)
-    optimizer = Measured(cfg=cfg)
+    cfg = CalibratedConfig(beta=0.05)
+    optimizer = Calibrated(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
     trace = {"w": jnp.ones((1, 3))}
@@ -110,20 +107,19 @@ def test_alpha_converges_to_first_over_second_moment():
     for _ in range(5000):
         _, state = optimizer.update(state, params, trace, td_error, interaction)
 
-    expected = eta * x / (x**2)
-    assert jnp.allclose(measured_alpha(cfg, state), expected, atol=1e-4)
+    expected = x / (x**2)
+    assert jnp.allclose(calibrated_alpha(cfg, state), expected, atol=1e-4)
 
 
 def test_target_variance_term_shrinks_step():
     # The defining piece of Eq. (7): the nu * E[delta^2 ||z||^2] noise term in
     # the denominator. A nonzero TD error must drive the step strictly below the
     # noise-free optimum, and the realized denominator must match E[X^2] + nu * y.
-    eta = 0.5
     x = 2.0
     delta = 1.5
     nu = 0.1
-    cfg = MeasuredConfig(eta=eta, beta=0.05, nu=nu)
-    optimizer = Measured(cfg=cfg)
+    cfg = CalibratedConfig(beta=0.05, nu=nu)
+    optimizer = Calibrated(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
     trace = {"w": jnp.ones((1, 3))}  # ||z||^2 = 3
@@ -139,19 +135,18 @@ def test_target_variance_term_shrinks_step():
     assert jnp.allclose(state.s_hat, x**2, atol=1e-4)
     assert jnp.allclose(state.y_hat, (delta**2) * z_sq, atol=1e-4)
 
-    expected = eta * x / (x**2 + nu * (delta**2) * z_sq)
-    alpha = measured_alpha(cfg, state)
+    expected = x / (x**2 + nu * (delta**2) * z_sq)
+    alpha = calibrated_alpha(cfg, state)
     assert jnp.allclose(alpha, expected, atol=1e-4)
-    assert alpha < eta * x / (x**2)  # noise term strictly shrinks the step
+    assert alpha < x / (x**2)  # noise term strictly shrinks the step
 
 
 def test_nonpositive_mean_interaction_gates_step_off():
     # The paper's one-sided test: when the running estimate of E[X] is
     # non-positive, no positive scalar step contracts, so the step turns off.
     # The gate is on the mean m_hat, not the instantaneous sample.
-    eta = 0.5
-    cfg = MeasuredConfig(eta=eta, beta=0.05)
-    optimizer = Measured(cfg=cfg)
+    cfg = CalibratedConfig(beta=0.05)
+    optimizer = Calibrated(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
     trace = {"w": jnp.ones((1, 3))}
@@ -163,7 +158,7 @@ def test_nonpositive_mean_interaction_gates_step_off():
         updates, state = optimizer.update(state, params, trace, td_error, neg_x)
 
     assert (state.m_hat < 0.0).all()
-    assert jnp.allclose(measured_alpha(cfg, state), 0.0)
+    assert jnp.allclose(calibrated_alpha(cfg, state), 0.0)
     assert jnp.allclose(updates["w"], 0.0)
 
 
@@ -171,10 +166,9 @@ def test_step_is_capped_at_one():
     # When the variance-optimal step would exceed 1, the optimizer caps it. With
     # a unit trace and unit TD error the applied update equals the (capped) step,
     # so we can read it straight off the update.
-    eta = 1.0
     x = 0.5
-    cfg = MeasuredConfig(eta=eta, beta=0.05, nu=0.0)
-    optimizer = Measured(cfg=cfg)
+    cfg = CalibratedConfig(beta=0.05, nu=0.0)
+    optimizer = Calibrated(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
     trace = {"w": jnp.ones((1, 3))}
@@ -186,18 +180,17 @@ def test_step_is_capped_at_one():
     for _ in range(5000):
         updates, state = optimizer.update(state, params, trace, td_error, interaction)
 
-    uncapped = eta * x / (x**2)
+    uncapped = x / (x**2)
     assert uncapped > 1.0  # without the cap the step would overshoot
-    assert jnp.allclose(measured_alpha(cfg, state), 1.0)
+    assert jnp.allclose(calibrated_alpha(cfg, state), 1.0)
     # update = mean over envs of alpha * td_error * z = 1.0 * 1.0 * 1.0
     assert jnp.allclose(updates["w"], 1.0, atol=1e-4)
 
 
 def test_update_equals_alpha_times_td_error_times_trace():
     # The applied update is the mean over the env axis of alpha * delta * z.
-    eta = 0.3
-    cfg = MeasuredConfig(eta=eta, beta=0.05, nu=0.0)
-    optimizer = Measured(cfg=cfg)
+    cfg = CalibratedConfig(beta=0.05, nu=0.0)
+    optimizer = Calibrated(cfg=cfg)
 
     params = {"w": jnp.zeros((2,))}
     trace = {"w": jnp.array([[1.0, 2.0], [3.0, 4.0]])}
@@ -213,7 +206,7 @@ def test_update_equals_alpha_times_td_error_times_trace():
     for _ in range(5000):
         updates, state = optimizer.update(state, params, trace, td_error, interaction)
 
-    alpha = measured_alpha(cfg, state)
+    alpha = calibrated_alpha(cfg, state)
     expected = (
         alpha[:, None] * td_error[:, None] * trace["w"]
     ).mean(axis=0)
@@ -221,8 +214,8 @@ def test_update_equals_alpha_times_td_error_times_trace():
 
 
 def test_update_is_jittable():
-    cfg = MeasuredConfig()
-    optimizer = Measured(cfg=cfg)
+    cfg = CalibratedConfig()
+    optimizer = Calibrated(cfg=cfg)
     params = {"w": jnp.ones((3,))}
     trace = {"w": jnp.ones((2, 3))}
     td_error = jnp.array([0.5, -0.5])

@@ -94,13 +94,13 @@ cp scripts/slurmpilot/clusters/ias.yaml ~/slurmpilot/config/clusters/ias.yaml
 Then launch (use `--dry-run` first to print the sweep and inspect the generated `slurm_script.sh` without submitting):
 
 ```bash
-# Measured eta sweep across the 4 MinAtar envs on CPU, with wandb (the old launch.sh default)
+# Calibrated eta sweep across the 4 MinAtar envs on CPU, with wandb (the old launch.sh default)
 uv run python scripts/launch.py
 
 # A different example on GPU, no eta sweep, no wandb
 uv run python scripts/launch.py --example stream_q_minatar --device gpu --no-wandb
 
-# MinAtar Q-learning across ALL optimizers (ObGD, Measured, Implicit, Intentional, AdaptiveQ),
+# MinAtar Q-learning across ALL optimizers (ObGD, Calibrated, Implicit, Intentional, AdaptiveQ),
 # one array job per optimizer
 uv run python scripts/minatar.py
 ```

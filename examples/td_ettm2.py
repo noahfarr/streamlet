@@ -21,8 +21,8 @@ from streax.optimizers import (
     ImplicitConfig,
     Intentional,
     IntentionalConfig,
-    Measured,
-    MeasuredConfig,
+    Calibrated,
+    CalibratedConfig,
     ObGD,
     ObGDConfig,
 )
@@ -39,28 +39,16 @@ parser.add_argument(
     ],
     help="ETT dataset to train on.",
 )
-parser.add_argument(
-    "--measured-eta",
-    type=float,
-    default=0.5,
-    help="Measured step-size scale (try 1.0 to remove the underfitting bias).",
-)
-parser.add_argument(
-    "--measured-nu",
-    type=float,
-    default=0.01,
-    help="Measured target-variance weight on E[delta^2 ||z||^2] (larger => smoother value fit).",
-)
 args = parser.parse_args()
 
 total_steps = 68_000
-seed = 0
+seed = 42
 num_seeds = 30
 env_id = args.env_id
 
 gamma = 0.99
 trace_lambda = 0.8
-beta = 0.99
+beta = 0.999
 
 
 def build_env():
@@ -124,9 +112,7 @@ optimizers = {
         cfg=IntentionalConfig(gamma=gamma, trace_lambda=trace_lambda, eta=0.25)
     ),
     "stream-TD": ObGD(cfg=ObGDConfig(lr=1.0, kappa=2.0)),
-    "measured-TD": Measured(
-        cfg=MeasuredConfig(eta=args.measured_eta, nu=args.measured_nu, beta=beta)
-    ),
+    "calibrated-TD": Calibrated(cfg=CalibratedConfig(nu=1.0, beta=beta)),
 }
 
 

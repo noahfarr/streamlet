@@ -8,7 +8,7 @@ import lox
 import optax
 from flax import core, struct
 
-from streax.optimizers import Implicit, Measured, MeasuredMode, ObGD, Optimizer
+from streax.optimizers import Calibrated, Implicit, ObGD, Optimizer
 from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
 from streax.utils.typing import (
     Array,
@@ -51,8 +51,6 @@ class RecurrentTDLambda:
     def _apply(
         self, params: PyTree, carry: PyTree, timestep: Timestep
     ) -> tuple[PyTree, Array]:
-        # The recurrent network receives observation, action, reward and done as
-        # separate positional arguments; it returns the advanced carry and value.
         return self.value_network.apply(
             params,
             carry,
@@ -76,7 +74,6 @@ class RecurrentTDLambda:
             (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
         )
 
-        # TD takes no action, but the carry must still advance through the obs.
         carry_next, _ = self._apply(state.value_params, state.carry, state.timestep)
 
         step_keys = jax.random.split(key, self.cfg.num_envs)
@@ -148,14 +145,11 @@ class RecurrentTDLambda:
             lambda t, g: broadcast(discount, t) * t + g, state.value_trace, value_grads
         )
 
-        if isinstance(self.value_optimizer, (Implicit, Measured)) or (
+        if isinstance(self.value_optimizer, (Implicit, Calibrated)) or (
             isinstance(self.value_optimizer, ObGD) and self.value_optimizer.cfg.exact
         ):
-            # The interaction must use the same preconditioned trace direction
-            # P z that the optimizer's update applies, so X = (g - gamma g')(P z).
-            # Implicit has no preconditioner; Measured optionally applies one.
             interaction_trace = value_trace
-            if isinstance(self.value_optimizer, Measured):
+            if isinstance(self.value_optimizer, (Calibrated, Implicit)):
                 interaction_trace = self.value_optimizer.precondition(
                     state.value_optimizer_state, value_trace
                 )
@@ -186,36 +180,12 @@ class RecurrentTDLambda:
             not_done = 1.0 - transition.second.done.astype(jnp.float32)
             curvature = gradient_trace - self.cfg.gamma * not_done * next_grad_trace
 
-            squared_grad_norm = None
-            if isinstance(self.value_optimizer, Measured) and (
-                self.value_optimizer.cfg.mode is MeasuredMode.FROBENIUS
-            ):
-                _, bootstrap_vjp = jax.vjp(
-                    lambda params: bootstrap_value(
-                        params, carry_next, transition.second
-                    ),
-                    state.value_params,
-                )
-                (next_grads,) = jax.vmap(bootstrap_vjp)(
-                    jnp.eye(batch, dtype=values.dtype)
-                )
-                grad_diff = jax.tree.map(
-                    lambda g, gn: g - self.cfg.gamma * broadcast(not_done, gn) * gn,
-                    value_grads,
-                    next_grads,
-                )
-                squared_grad_norm = sum(
-                    jnp.sum(jnp.square(b), axis=tuple(range(1, b.ndim)))
-                    for b in jax.tree.leaves(grad_diff)
-                )
-
             value_updates, value_optimizer_state = self.value_optimizer.update(
                 state.value_optimizer_state,
                 value_grads,
                 value_trace,
                 td_error,
                 curvature,
-                squared_grad_norm,
             )
         else:
             value_updates, value_optimizer_state = self.value_optimizer.update(

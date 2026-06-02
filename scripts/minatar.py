@@ -7,7 +7,7 @@ from launch import DEFAULT_SETUP, MINATAR_ENV_IDS, SlurmPilot, submit
 
 OPTIMIZER_EXAMPLES = {
     "stream_q": "stream_q_minatar",
-    "measured_q": "measured_q_minatar",
+    "calibrated_q": "calibrated_q_minatar",
     "implicit_q": "implicit_q_minatar",
     "intentional_q": "intentional_q_minatar",
     "adaptive_q": "adaptive_q_minatar",

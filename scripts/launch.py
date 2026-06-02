@@ -125,7 +125,7 @@ def parse_args() -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument(
-        "--example", default="measured_q_minatar", help="examples/<name>.py to run."
+        "--example", default="calibrated_q_minatar", help="examples/<name>.py to run."
     )
     p.add_argument("--env-ids", nargs="+", default=MINATAR_ENV_IDS)
     p.add_argument("--device", choices=["cpu", "gpu"], default="cpu")

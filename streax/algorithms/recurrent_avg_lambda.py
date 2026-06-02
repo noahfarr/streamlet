@@ -65,8 +65,6 @@ class RecurrentAVGLambda:
     def _actor_apply(
         self, params: PyTree, carry: PyTree, timestep: Timestep
     ) -> tuple[PyTree, Any]:
-        # Returns (advanced carry, action distribution). The recurrent core is
-        # conditioned on observation, previous action, reward and done.
         return self.actor_network.apply(
             params,
             carry,
@@ -79,11 +77,6 @@ class RecurrentAVGLambda:
     def _critic_apply(
         self, params: PyTree, carry: PyTree, timestep: Timestep, action: Array
     ) -> tuple[PyTree, Array]:
-        # The recurrent critic uses the same (carry, obs, action, reward, done)
-        # signature as every other network. `action` is the action being valued
-        # and fills the action slot, so Q(s, a) is conditioned on it directly.
-        # Only the executed-action call's carry is kept; counterfactual
-        # evaluations (bootstrap, reparam) discard their returned carry.
         return self.critic_network.apply(
             params,
             carry,
@@ -156,8 +149,6 @@ class RecurrentAVGLambda:
         action_keys = jax.random.split(sample_key, self.cfg.num_envs)
         timestep = state.timestep
 
-        # --- sample the executed action and advance the actor carry (per env so
-        # the actor optimizer receives per-environment gradients) ---
         def sample(actor_params, carry, ts, k):
             carry, dist = self._actor_apply(actor_params, carry, ts)
             action, log_prob = dist.sample_and_log_prob(seed=k)
@@ -182,7 +173,6 @@ class RecurrentAVGLambda:
         )
         actor_carry_for_next = self._reset_carry(actor_carry_next, done)
 
-        # --- critic value q_t at (obs_t, a_t); advance the critic carry ---
         def critic_value(critic_params, carry, ts, action):
             carry, q = self._critic_apply(critic_params, carry, ts, action)
             return carry, q
@@ -195,7 +185,6 @@ class RecurrentAVGLambda:
         )
         critic_carry_for_next = self._reset_carry(critic_carry_next, done)
 
-        # --- bootstrap target at the next observation ---
         def target_value(actor_params, critic_params, a_carry, c_carry, ts, k):
             _, next_dist = self._actor_apply(actor_params, a_carry, ts)
             next_action, next_log_prob = next_dist.sample_and_log_prob(seed=k)
@@ -220,7 +209,6 @@ class RecurrentAVGLambda:
         sigma = td_scaler.sigma()
         td_error = (reward + not_done * self.cfg.gamma * target_v - q) / sigma
 
-        # --- actor ascent ---
         def compute_actor_loss(actor_params, a_carry, c_carry, ts, key):
             _, dist = self._actor_apply(actor_params, a_carry, ts)
             reparam_action, reparam_log_prob = dist.sample_and_log_prob(seed=key)
@@ -247,7 +235,6 @@ class RecurrentAVGLambda:
             lambda p, u: p + u, state.actor_params, actor_updates
         )
 
-        # --- critic gradient and eligibility trace ---
         def compute_q_value(critic_params, c_carry, ts, action):
             _, q = self._critic_apply(critic_params, c_carry, ts, action)
             return q

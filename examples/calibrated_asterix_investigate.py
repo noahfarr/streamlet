@@ -4,12 +4,12 @@ Runs a focused diagnostic (default 200k steps) comparing, on identical env
 seeds and an identical network/normalization stack (sticky actions matched):
 
   - obgd                : ObGD baseline (known to learn Asterix).
-  - measured            : Measured with preconditioning ON  (beta=0.999).
-  - measured-no-precond : Measured with preconditioning OFF (beta=1.0 freezes
+  - calibrated            : Calibrated with preconditioning ON  (beta=0.999).
+  - calibrated-no-precond : Calibrated with preconditioning OFF (beta=1.0 freezes
                           v at preconditioning_init, so P is a constant ~= I;
                           because alpha self-normalises the uniform scale this
-                          is exactly the pre-preconditioning Measured).
-  - measured-alphacap   : Measured (precond off) with alpha_max=1e-2, to test
+                          is exactly the pre-preconditioning Calibrated).
+  - calibrated-alphacap   : Calibrated (precond off) with alpha_max=1e-2, to test
                           whether an early oversized step triggers divergence.
 
 For each config it reports, PER SEED (aggregate means are poisoned by a single
@@ -36,13 +36,12 @@ from streax.environments.wrappers import (
     StickyActionWrapper,
 )
 from streax.networks import Flatten, sparse
-from streax.optimizers import Measured, MeasuredConfig, ObGD, ObGDConfig
+from streax.optimizers import Calibrated, CalibratedConfig, ObGD, ObGDConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--env-id", default="gymnax::Asterix-MinAtar")
 parser.add_argument("--steps", type=int, default=200_000)
 parser.add_argument("--num-seeds", type=int, default=5)
-parser.add_argument("--eta", type=float, default=0.5)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument(
     "--diverge-threshold",
@@ -99,12 +98,12 @@ CONFIGS = {
     "obgd": lambda: ObGD(
         cfg=ObGDConfig(lr=1.0, kappa=2.0, beta2=0.999, eps=1e-8, adaptive=False)
     ),
-    "measured": lambda: Measured(cfg=MeasuredConfig(eta=args.eta, beta=0.999)),
-    "measured-no-precond": lambda: Measured(
-        cfg=MeasuredConfig(eta=args.eta, beta=1.0)
+    "calibrated": lambda: Calibrated(cfg=CalibratedConfig(beta=0.999)),
+    "calibrated-no-precond": lambda: Calibrated(
+        cfg=CalibratedConfig(beta=1.0)
     ),
-    "measured-alphacap": lambda: Measured(
-        cfg=MeasuredConfig(eta=args.eta, beta=1.0, alpha_max=1e-2)
+    "calibrated-alphacap": lambda: Calibrated(
+        cfg=CalibratedConfig(beta=1.0, alpha_max=1e-2)
     ),
 }
 
@@ -169,10 +168,10 @@ def plot_config(name, logs, onsets, plot_dir):
     keys = [
         ("q_network/q_value", "q_value"),
         ("q_network/td_error", "td_error"),
-        ("measured/m_hat", "m_hat"),
-        ("measured/s_hat", "s_hat"),
-        ("measured/step_size", "step_size"),
-        ("measured/update_norm", "update_norm"),
+        ("calibrated/m_hat", "m_hat"),
+        ("calibrated/s_hat", "s_hat"),
+        ("calibrated/step_size", "step_size"),
+        ("calibrated/update_norm", "update_norm"),
         ("q_trace/trace_norm", "trace_norm"),
         ("obgd/step_size", "step_size"),
         ("obgd/update_norm", "update_norm"),
@@ -216,7 +215,7 @@ def main():
 
     print(
         f"env={args.env_id} steps={args.steps} seeds={args.num_seeds} "
-        f"eta={args.eta} threshold={args.diverge_threshold}"
+        f"threshold={args.diverge_threshold}"
     )
     summary = {}
     for name, build in CONFIGS.items():

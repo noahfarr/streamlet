@@ -24,8 +24,8 @@ from streax.optimizers import (
     ImplicitConfig,
     Intentional,
     IntentionalConfig,
-    Measured,
-    MeasuredConfig,
+    Calibrated,
+    CalibratedConfig,
     ObGD,
     ObGDConfig,
 )
@@ -48,7 +48,7 @@ ENV_IDS = [
 
 # Each entry builds a fresh optimizer instance with its tuned hyperparameters.
 OPTIMIZERS = {
-    "measured": lambda: Measured(cfg=MeasuredConfig(eta=0.5), name="optimizer"),
+    "calibrated": lambda: Calibrated(cfg=CalibratedConfig(), name="optimizer"),
     "implicit": lambda: Implicit(
         cfg=ImplicitConfig(gamma=gamma, trace_lambda=trace_lambda, eta=0.25),
         name="optimizer",

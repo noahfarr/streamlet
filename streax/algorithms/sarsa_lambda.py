@@ -155,9 +155,6 @@ class SARSALambda:
         if isinstance(self.q_optimizer, Implicit) or (
             isinstance(self.q_optimizer, ObGD) and self.q_optimizer.cfg.exact
         ):
-            # The interaction must use the same preconditioned trace direction
-            # P z that the optimizer's update applies; Implicit optionally
-            # applies an RMSProp preconditioner.
             interaction_trace = q_trace
             if isinstance(self.q_optimizer, Implicit):
                 interaction_trace = self.q_optimizer.precondition(

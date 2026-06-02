@@ -50,18 +50,9 @@ def main():
         name = row["optimizer"]
         if name == "obgd":
             return "obgd-exact" if truthy(row.get("optimizer/exact")) else "obgd"
-        if name != "measured":
+        if name != "calibrated":
             return name
-        nu_mode = row.get("optimizer/nu_mode")
-        if isinstance(nu_mode, str) and nu_mode.upper() != "FIXED":
-            return f"measured[{nu_mode.lower()}]"
-        if truthy(row.get("optimizer/adaptive_nu")):
-            return "measured[trace]"
-        if truthy(row.get("optimizer/adaptive_v")):
-            return "measured[adaptiveV]"
-        if str(row.get("optimizer/mode")).upper() == "FROBENIUS":
-            return "measured[frobenius]"
-        return f"measured[nu={row.get('optimizer/nu')}]"
+        return f"calibrated[nu={row.get('optimizer/nu')}]"
 
     df["variant"] = df.apply(variant, axis=1)
 

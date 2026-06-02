@@ -67,11 +67,10 @@ from streax.environments.wrappers import (
 )
 from streax.networks import Flatten, sparse
 from streax.optimizers import (
+    Calibrated,
+    CalibratedConfig,
     Implicit,
     ImplicitConfig,
-    Measured,
-    MeasuredConfig,
-    MeasuredMode,
     ObGD,
     ObGDConfig,
     OptaxOptimizer,
@@ -244,9 +243,7 @@ def _recurrent_q(args, optimizer):
 TARGETS: dict[str, Callable] = {
     "q_lambda_obgd": lambda a: _q(a, ObGD(cfg=ObGDConfig(lr=1.0))),
     "q_lambda_obgd_exact": lambda a: _q(a, ObGD(cfg=ObGDConfig(lr=1e-3, exact=True))),
-    "q_lambda_measured": lambda a: _q(
-        a, Measured(cfg=MeasuredConfig(eta=0.5, mode=MeasuredMode.FROBENIUS))
-    ),
+    "q_lambda_calibrated": lambda a: _q(a, Calibrated(cfg=CalibratedConfig())),
     "sarsa_lambda_obgd": lambda a: _sarsa(a, ObGD(cfg=ObGDConfig(lr=1.0))),
     "sarsa_lambda_implicit": lambda a: _sarsa(a, Implicit(cfg=ImplicitConfig(lr=1.0))),
     "td_lambda_obgd": lambda a: _td(a, ObGD(cfg=ObGDConfig(lr=1.0))),
