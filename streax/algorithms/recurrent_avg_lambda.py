@@ -10,7 +10,13 @@ import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
-from streax.utils import Timestep, Transition, TDErrorScalerState, broadcast, canonicalize_dtype
+from streax.utils import (
+    TDErrorScalerState,
+    Timestep,
+    Transition,
+    broadcast,
+    canonicalize_dtype,
+)
 from streax.utils.typing import (
     Array,
     Environment,
@@ -22,7 +28,7 @@ from streax.utils.typing import (
 
 
 @struct.dataclass(frozen=True)
-class AVGConfig:
+class RecurrentAVGLambdaConfig:
     num_envs: int
     gamma: float
     alpha: float
@@ -31,10 +37,12 @@ class AVGConfig:
 
 
 @struct.dataclass(frozen=True)
-class AVGState:
+class RecurrentAVGLambdaState:
     step: int
     update_step: int
     timestep: Timestep
+    actor_carry: PyTree
+    critic_carry: PyTree
     env_state: EnvState
     actor_params: core.FrozenDict[str, Any]
     actor_optimizer_state: PyTree
@@ -45,8 +53,8 @@ class AVGState:
 
 
 @dataclass
-class AVG:
-    cfg: AVGConfig
+class RecurrentAVGLambda:
+    cfg: RecurrentAVGLambdaConfig
     env: Environment
     env_params: EnvParams
     actor_network: nn.Module
@@ -54,33 +62,64 @@ class AVG:
     actor_optimizer: Optimizer
     critic_optimizer: Optimizer
 
-    def _sample_action(
-        self, params: PyTree, obs: Array, key: Key
-    ) -> tuple[Array, Array]:
-        dist = self.actor_network.apply(params, obs)
-        return dist.sample_and_log_prob(seed=key)
-
-    def _stochastic_action(
-        self, key: Key, state: AVGState
-    ) -> tuple[Array, Array]:
-        keys = jax.random.split(key, self.cfg.num_envs)
-        return jax.vmap(self._sample_action, in_axes=(None, 0, 0))(
-            state.actor_params, state.timestep.obs, keys
+    def _actor_apply(
+        self, params: PyTree, carry: PyTree, timestep: Timestep
+    ) -> tuple[PyTree, Any]:
+        # Returns (advanced carry, action distribution). The recurrent core is
+        # conditioned on observation, previous action, reward and done.
+        return self.actor_network.apply(
+            params,
+            carry,
+            timestep.obs,
+            timestep.action,
+            timestep.reward,
+            timestep.done,
         )
 
-    def _deterministic_action(
-        self, key: Key, state: AVGState
+    def _critic_apply(
+        self, params: PyTree, carry: PyTree, timestep: Timestep, action: Array
+    ) -> tuple[PyTree, Array]:
+        # The recurrent critic uses the same (carry, obs, action, reward, done)
+        # signature as every other network. `action` is the action being valued
+        # and fills the action slot, so Q(s, a) is conditioned on it directly.
+        # Only the executed-action call's carry is kept; counterfactual
+        # evaluations (bootstrap, reparam) discard their returned carry.
+        return self.critic_network.apply(
+            params,
+            carry,
+            timestep.obs,
+            action,
+            timestep.reward,
+            timestep.done,
+        )
+
+    def _reset_carry(self, carry: PyTree, done: Array) -> PyTree:
+        return jax.tree.map(
+            lambda leaf: jnp.where(broadcast(done, leaf), jnp.zeros_like(leaf), leaf),
+            carry,
+        )
+
+    def _stochastic_action(
+        self, key: Key, dist: Any
     ) -> tuple[Array, Array]:
-        dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
+        return dist.sample_and_log_prob(seed=key)
+
+    def _deterministic_action(
+        self, key: Key, dist: Any
+    ) -> tuple[Array, Array]:
         action = dist.bijector.forward(dist.distribution.mode())
         log_prob = dist.log_prob(action)
         return action, log_prob
 
     def _step(
-        self, state: AVGState, key: Key, *, policy: Callable
-    ) -> tuple[AVGState, Transition]:
+        self, state: RecurrentAVGLambdaState, key: Key, *, policy: Callable
+    ) -> tuple[RecurrentAVGLambdaState, Transition]:
         action_key, step_key = jax.random.split(key)
-        action, log_prob = policy(action_key, state)
+
+        actor_carry_next, dist = self._actor_apply(
+            state.actor_params, state.actor_carry, state.timestep
+        )
+        action, log_prob = policy(action_key, dist)
 
         step_keys = jax.random.split(step_key, self.cfg.num_envs)
         next_obs, env_state, reward, done, info = jax.vmap(
@@ -100,26 +139,33 @@ class AVG:
                 step=state.step + self.cfg.num_envs,
                 timestep=Timestep(
                     obs=next_obs,
-                    action=jnp.where(
-                        broadcast(done, action), jnp.zeros_like(action), action
-                    ),
+                    action=jnp.where(broadcast(done, action), jnp.zeros_like(action), action),
                     reward=jnp.where(done, jnp.zeros_like(reward), reward),
                     done=done,
                 ),
+                actor_carry=self._reset_carry(actor_carry_next, done),
                 env_state=env_state,
             ),
             transition,
         )
 
     def _update_step(
-        self, state: AVGState, key: Key
-    ) -> tuple[AVGState, None]:
+        self, state: RecurrentAVGLambdaState, key: Key
+    ) -> tuple[RecurrentAVGLambdaState, None]:
         sample_key, step_key, next_action_key = jax.random.split(key, 3)
         action_keys = jax.random.split(sample_key, self.cfg.num_envs)
+        timestep = state.timestep
 
-        action, log_prob = jax.vmap(self._sample_action, in_axes=(None, 0, 0))(
-            state.actor_params, state.timestep.obs, action_keys
-        )
+        # --- sample the executed action and advance the actor carry (per env so
+        # the actor optimizer receives per-environment gradients) ---
+        def sample(actor_params, carry, ts, k):
+            carry, dist = self._actor_apply(actor_params, carry, ts)
+            action, log_prob = dist.sample_and_log_prob(seed=k)
+            return carry, action, log_prob
+
+        actor_carry_next, action, log_prob = jax.vmap(
+            sample, in_axes=(None, 0, 0, 0)
+        )(state.actor_params, state.actor_carry, timestep, action_keys)
         action = jax.lax.stop_gradient(action)
         log_prob = jax.lax.stop_gradient(log_prob)
 
@@ -131,37 +177,67 @@ class AVG:
         done = jnp.asarray(done, dtype=jnp.bool_)
         not_done = 1.0 - done.astype(jnp.float32)
 
-        next_dist = self.actor_network.apply(
-            jax.lax.stop_gradient(state.actor_params), next_obs
+        next_timestep = Timestep(
+            obs=next_obs, action=action, reward=reward, done=done
         )
-        next_action, next_log_prob = next_dist.sample_and_log_prob(
-            seed=next_action_key
+        actor_carry_for_next = self._reset_carry(actor_carry_next, done)
+
+        # --- critic value q_t at (obs_t, a_t); advance the critic carry ---
+        def critic_value(critic_params, carry, ts, action):
+            carry, q = self._critic_apply(critic_params, carry, ts, action)
+            return carry, q
+
+        critic_carry_next, q = jax.vmap(critic_value, in_axes=(None, 0, 0, 0))(
+            jax.lax.stop_gradient(state.critic_params),
+            state.critic_carry,
+            timestep,
+            action,
         )
-        next_q = self.critic_network.apply(
-            jax.lax.stop_gradient(state.critic_params), next_obs, next_action
+        critic_carry_for_next = self._reset_carry(critic_carry_next, done)
+
+        # --- bootstrap target at the next observation ---
+        def target_value(actor_params, critic_params, a_carry, c_carry, ts, k):
+            _, next_dist = self._actor_apply(actor_params, a_carry, ts)
+            next_action, next_log_prob = next_dist.sample_and_log_prob(seed=k)
+            _, next_q = self._critic_apply(critic_params, c_carry, ts, next_action)
+            return next_q, next_log_prob
+
+        next_action_keys = jax.random.split(next_action_key, self.cfg.num_envs)
+        next_q, next_log_prob = jax.vmap(
+            target_value, in_axes=(None, None, 0, 0, 0, 0)
+        )(
+            jax.lax.stop_gradient(state.actor_params),
+            jax.lax.stop_gradient(state.critic_params),
+            actor_carry_for_next,
+            critic_carry_for_next,
+            next_timestep,
+            next_action_keys,
         )
         target_v = next_q - self.cfg.alpha * next_log_prob
 
         r_ent = reward - self.cfg.alpha * log_prob
         td_scaler = state.td_scaler.update(r_ent, done, self.cfg.gamma)
         sigma = td_scaler.sigma()
-
-        q = self.critic_network.apply(
-            jax.lax.stop_gradient(state.critic_params), state.timestep.obs, action
-        )
         td_error = (reward + not_done * self.cfg.gamma * target_v - q) / sigma
 
-        def compute_actor_loss(actor_params: PyTree, obs: Array, key: Key) -> Array:
-            dist = self.actor_network.apply(actor_params, obs)
+        # --- actor ascent ---
+        def compute_actor_loss(actor_params, a_carry, c_carry, ts, key):
+            _, dist = self._actor_apply(actor_params, a_carry, ts)
             reparam_action, reparam_log_prob = dist.sample_and_log_prob(seed=key)
-            reparam_q = self.critic_network.apply(
-                jax.lax.stop_gradient(state.critic_params), obs, reparam_action
+            _, reparam_q = self._critic_apply(
+                jax.lax.stop_gradient(state.critic_params), c_carry, ts, reparam_action
             )
             return self.cfg.alpha * reparam_log_prob - reparam_q
 
         actor_losses, actor_grads = jax.vmap(
-            jax.value_and_grad(compute_actor_loss), in_axes=(None, 0, 0)
-        )(state.actor_params, state.timestep.obs, action_keys)
+            jax.value_and_grad(compute_actor_loss), in_axes=(None, 0, 0, 0, 0)
+        )(
+            state.actor_params,
+            state.actor_carry,
+            state.critic_carry,
+            timestep,
+            action_keys,
+        )
         actor_ascent = jax.tree.map(jnp.negative, actor_grads)
         actor_td_error = jnp.ones((self.cfg.num_envs,), dtype=jnp.float32)
         actor_updates, actor_optimizer_state = self.actor_optimizer.update(
@@ -171,11 +247,13 @@ class AVG:
             lambda p, u: p + u, state.actor_params, actor_updates
         )
 
-        def compute_q_value(params: PyTree, obs: Array, action: Array) -> Array:
-            return self.critic_network.apply(params, obs, action)
+        # --- critic gradient and eligibility trace ---
+        def compute_q_value(critic_params, c_carry, ts, action):
+            _, q = self._critic_apply(critic_params, c_carry, ts, action)
+            return q
 
-        q_grads = jax.vmap(jax.grad(compute_q_value), in_axes=(None, 0, 0))(
-            state.critic_params, state.timestep.obs, action
+        q_grads = jax.vmap(jax.grad(compute_q_value), in_axes=(None, 0, 0, 0))(
+            state.critic_params, state.critic_carry, timestep, action
         )
 
         trace_decay = self.cfg.gamma * self.cfg.trace_lambda
@@ -218,6 +296,8 @@ class AVG:
                     reward=jnp.where(done, jnp.zeros_like(reward), reward),
                     done=done,
                 ),
+                actor_carry=actor_carry_for_next,
+                critic_carry=critic_carry_for_next,
                 env_state=env_state,
                 actor_params=actor_params,
                 actor_optimizer_state=actor_optimizer_state,
@@ -229,8 +309,10 @@ class AVG:
             None,
         )
 
-    def init(self, key: Key) -> AVGState:
-        env_key, actor_key, critic_key = jax.random.split(key, 3)
+    def init(self, key: Key) -> RecurrentAVGLambdaState:
+        env_key, actor_key, critic_key, actor_carry_key, critic_carry_key = (
+            jax.random.split(key, 5)
+        )
         env_keys = jax.random.split(env_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             env_keys, self.env_params
@@ -243,8 +325,28 @@ class AVG:
         done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
         timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
 
-        actor_params = self.actor_network.init(actor_key, obs)
-        critic_params = self.critic_network.init(critic_key, obs, action)
+        actor_carry = self.actor_network.initialize_carry(
+            actor_carry_key, self.cfg.num_envs
+        )
+        critic_carry = self.critic_network.initialize_carry(
+            critic_carry_key, self.cfg.num_envs
+        )
+        actor_params = self.actor_network.init(
+            actor_key,
+            actor_carry,
+            timestep.obs,
+            timestep.action,
+            timestep.reward,
+            timestep.done,
+        )
+        critic_params = self.critic_network.init(
+            critic_key,
+            critic_carry,
+            timestep.obs,
+            action,
+            timestep.reward,
+            timestep.done,
+        )
 
         actor_optimizer_state = self.actor_optimizer.init(
             actor_params, self.cfg.num_envs
@@ -258,10 +360,12 @@ class AVG:
             critic_params,
         )
 
-        return AVGState(
+        return RecurrentAVGLambdaState(
             step=0,
             update_step=0,
             timestep=timestep,
+            actor_carry=actor_carry,
+            critic_carry=critic_carry,
             env_state=env_state,
             actor_params=actor_params,
             actor_optimizer_state=actor_optimizer_state,
@@ -271,10 +375,14 @@ class AVG:
             td_scaler=TDErrorScalerState.init(self.cfg.num_envs),
         )
 
-    def warmup(self, key: Key, state: AVGState, num_steps: int) -> AVGState:
+    def warmup(
+        self, key: Key, state: RecurrentAVGLambdaState, num_steps: int
+    ) -> RecurrentAVGLambdaState:
         return state
 
-    def train(self, key: Key, state: AVGState, num_steps: int) -> AVGState:
+    def train(
+        self, key: Key, state: RecurrentAVGLambdaState, num_steps: int
+    ) -> RecurrentAVGLambdaState:
         keys = jax.random.split(key, num_steps // self.cfg.num_envs)
         state, _ = jax.lax.scan(
             self._update_step, state, keys, unroll=self.cfg.unroll
@@ -284,11 +392,11 @@ class AVG:
     def evaluate(
         self,
         key: Key,
-        state: AVGState,
+        state: RecurrentAVGLambdaState,
         num_steps: int,
         deterministic: bool = True,
-    ) -> AVGState:
-        reset_key, eval_key = jax.random.split(key)
+    ) -> RecurrentAVGLambdaState:
+        reset_key, carry_key, eval_key = jax.random.split(key, 3)
         reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             reset_keys, self.env_params
@@ -303,6 +411,9 @@ class AVG:
                 ),
                 reward=jnp.zeros(self.cfg.num_envs),
                 done=jnp.ones(self.cfg.num_envs, dtype=jnp.bool_),
+            ),
+            actor_carry=self.actor_network.initialize_carry(
+                carry_key, self.cfg.num_envs
             ),
             env_state=env_state,
         )

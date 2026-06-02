@@ -10,7 +10,7 @@ import lox
 import optax
 from flax.linen.initializers import orthogonal, zeros
 
-from streax.algorithms import AVG, AVGConfig
+from streax.algorithms import AVGLambda, AVGLambdaConfig
 from streax.environments import environment
 from streax.environments.wrappers import (
     NormalizeObservationWrapper,
@@ -67,7 +67,7 @@ env = NormalizeRewardWrapper(env, gamma=gamma)
 action_dim = env.action_space(env_params).shape[0]
 
 
-config = AVGConfig(
+config = AVGLambdaConfig(
     num_envs=1,
     gamma=gamma,
     alpha=alpha,
@@ -121,7 +121,7 @@ critic_network = nn.Sequential(
 actor_optimizer = OptaxOptimizer(optax.adam(actor_lr, b1=beta1, b2=beta2, eps=eps))
 critic_optimizer = OptaxOptimizer(optax.adam(critic_lr, b1=beta1, b2=beta2, eps=eps))
 
-agent = AVG(
+agent = AVGLambda(
     config,
     env,
     env_params,
@@ -135,13 +135,13 @@ agent = AVG(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"AVG__{env_id}__adam"
+group = f"AVGLambda__{env_id}__adam"
 
 loggers = [
     DashboardLogger(
         total_timesteps=total_timesteps,
         summary={
-            "Algorithm": "AVG",
+            "Algorithm": "AVGLambda",
             "Environment": env_id,
             "Total Timesteps": f"{total_timesteps:_}",
         },
@@ -151,11 +151,11 @@ if args.wandb:
     loggers.append(
         WandbLogger(
             project="stremax",
-            name="AVG",
+            name="AVGLambda",
             mode="online",
             group=group,
             cfg={
-                "algorithm": "AVG",
+                "algorithm": "AVGLambda",
                 "env_id": env_id,
                 "total_timesteps": total_timesteps,
                 **dataclasses.asdict(config),

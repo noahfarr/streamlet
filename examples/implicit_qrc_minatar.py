@@ -18,7 +18,7 @@ from streax.environments.wrappers import (
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
 from streax.networks import Flatten, sparse
-from streax.optimizers import OptaxOptimizer
+from streax.optimizers import Implicit, ImplicitConfig, OptaxOptimizer
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
@@ -88,9 +88,12 @@ h_network = nn.Sequential(
     ]
 )
 
-q_lr = 1e-4
-h_lr = 0.1 * q_lr
-q_optimizer = OptaxOptimizer(tx=optax.sgd(q_lr), name="q_optimizer")
+eta = 0.5
+q_optimizer = Implicit(
+    cfg=ImplicitConfig(gamma=gamma, trace_lambda=trace_lambda, eta=eta),
+    name="q_optimizer",
+)
+h_lr = 0.1 * 1e-4
 h_optimizer = OptaxOptimizer(tx=optax.sgd(h_lr), name="h_optimizer")
 
 epsilon_start = 1.0
@@ -115,13 +118,13 @@ agent = QRCLambda(
 init = jax.vmap(agent.init)
 train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
 
-group = f"qrc__{env_id}__sgd"
+group = f"implicit_qrc__{env_id}__implicit"
 
 loggers = [
     DashboardLogger(
         total_timesteps=total_timesteps,
         summary={
-            "Algorithm": "qrc",
+            "Algorithm": "implicit_qrc",
             "Environment": env_id,
             "Total Timesteps": f"{total_timesteps:_}",
         },
@@ -131,17 +134,17 @@ if args.wandb:
     loggers.append(
         WandbLogger(
             project="stremax",
-            name="QRCLambda",
+            name="ImplicitQRCLambda",
             mode="online",
             group=group,
             cfg={
-                "algorithm": "qrc",
+                "algorithm": "implicit_qrc",
                 "env_id": env_id,
                 "total_timesteps": total_timesteps,
                 **dataclasses.asdict(config),
                 "q_optimizer": q_optimizer.name,
                 "h_optimizer": h_optimizer.name,
-                "q_lr": q_lr,
+                "eta": eta,
                 "h_lr": h_lr,
             },
             seed=seed,

@@ -90,10 +90,15 @@ class Implicit:
         td_error: Array,
         curvature: Array,
         squared_grad_norm: Array | None = None,
+        *,
+        td_error_grad: PyTree | None = None,
+        h_value: Array | None = None,
+        bias_trace: Array | None = None,
     ) -> tuple[PyTree, ImplicitState]:
         # squared_grad_norm is the Frobenius term used by Measured; the implicit
         # closed-loop form does not use it.
         del squared_grad_norm
+        qrc = td_error_grad is not None
         cfg = self.cfg
         next_step = state.step + 1
 
@@ -171,12 +176,49 @@ class Implicit:
             new_absolute_delta_ema = state.absolute_delta_ema
             safe_delta = clipped_delta
 
-        scale = safe_delta * step_size
-        updates = jax.tree.map(
-            lambda t, m: (broadcast(scale, t) * t / m).mean(axis=0),
-            trace,
-            preconditioner,
-        )
+        if qrc:
+            bg = sum(
+                jnp.sum(b * g / m, axis=tuple(range(1, b.ndim)))
+                for b, g, m in zip(
+                    jax.tree.leaves(td_error_grad),
+                    jax.tree.leaves(gradient),
+                    jax.tree.leaves(preconditioner),
+                )
+            )
+            bb = sum(
+                jnp.sum(b * b / m, axis=tuple(range(1, b.ndim)))
+                for b, m in zip(
+                    jax.tree.leaves(td_error_grad),
+                    jax.tree.leaves(preconditioner),
+                )
+            )
+            base_step = cfg.eta / jnp.maximum(baseline, cfg.eps)
+            proximal_delta = safe_delta - base_step * (h_value * bg + bias_trace * bb)
+
+            scale_z = proximal_delta * step_size
+            scale_g = h_value * base_step
+            scale_b = bias_trace * base_step
+            updates = jax.tree.map(
+                lambda z, g, b, m: (
+                    (
+                        broadcast(scale_z, z) * z
+                        - broadcast(scale_g, g) * g
+                        - broadcast(scale_b, b) * b
+                    )
+                    / m
+                ).mean(axis=0),
+                trace,
+                gradient,
+                td_error_grad,
+                preconditioner,
+            )
+        else:
+            scale = safe_delta * step_size
+            updates = jax.tree.map(
+                lambda t, m: (broadcast(scale, t) * t / m).mean(axis=0),
+                trace,
+                preconditioner,
+            )
 
         new_state = ImplicitState(
             second_moment=new_second_moment,
@@ -187,15 +229,18 @@ class Implicit:
             norm_step=next_norm_step,
             step=next_step,
         )
-        lox.log(
-            {
-                f"{self.name}/step_size": step_size.mean(),
-                f"{self.name}/curvature": curvature.mean(),
-                f"{self.name}/denominator": denominator.mean(),
-                f"{self.name}/baseline": baseline.mean(),
-                f"{self.name}/sigma": new_sigma.mean(),
-                f"{self.name}/safe_delta": safe_delta.mean(),
-                f"{self.name}/update_norm": optax.global_norm(updates),
-            }
-        )
+        log_dict = {
+            f"{self.name}/step_size": step_size.mean(),
+            f"{self.name}/curvature": curvature.mean(),
+            f"{self.name}/denominator": denominator.mean(),
+            f"{self.name}/baseline": baseline.mean(),
+            f"{self.name}/sigma": new_sigma.mean(),
+            f"{self.name}/safe_delta": safe_delta.mean(),
+            f"{self.name}/update_norm": optax.global_norm(updates),
+        }
+        if qrc:
+            log_dict[f"{self.name}/proximal_delta"] = proximal_delta.mean()
+            log_dict[f"{self.name}/bg"] = bg.mean()
+            log_dict[f"{self.name}/bb"] = bb.mean()
+        lox.log(log_dict)
         return updates, new_state

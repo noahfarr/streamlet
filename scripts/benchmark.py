@@ -49,8 +49,8 @@ from streax.algorithms import (
     ACLambdaConfig,
     QLambda,
     QLambdaConfig,
-    QRC,
-    QRCConfig,
+    QRCLambda,
+    QRCLambdaConfig,
     RecurrentQLambda,
     RecurrentQLambdaConfig,
     SARSALambda,
@@ -212,7 +212,7 @@ def _ac(args):
 def _qrc(args):
     env, env_params = make_minatar(args.env_id)
     n = env.action_space(env_params).n
-    cfg = QRCConfig(
+    cfg = QRCLambdaConfig(
         num_envs=args.num_envs,
         gamma=0.99,
         trace_lambda=0.8,
@@ -220,7 +220,7 @@ def _qrc(args):
         regularization_coefficient=0.01,
         unroll=2,
     )
-    return QRC(
+    return QRCLambda(
         cfg,
         env,
         env_params,

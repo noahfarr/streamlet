@@ -9,7 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
-from streax.optimizers import Optimizer
+from streax.optimizers import Implicit, Optimizer
 from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
 from streax.utils.typing import (
     Array,
@@ -22,7 +22,7 @@ from streax.utils.typing import (
 
 
 @struct.dataclass(frozen=True)
-class RecurrentQRCConfig:
+class QRCLambdaConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
@@ -32,12 +32,10 @@ class RecurrentQRCConfig:
 
 
 @struct.dataclass(frozen=True)
-class RecurrentQRCState:
+class QRCLambdaState:
     step: int
     update_step: int
     timestep: Timestep
-    q_carry: PyTree
-    h_carry: PyTree
     env_state: EnvState
     q_params: core.FrozenDict[str, Any]
     h_params: core.FrozenDict[str, Any]
@@ -49,8 +47,8 @@ class RecurrentQRCState:
 
 
 @dataclass
-class RecurrentQRC:
-    cfg: RecurrentQRCConfig
+class QRCLambda:
+    cfg: QRCLambdaConfig
     env: Environment
     env_params: EnvParams
     q_network: nn.Module
@@ -59,39 +57,10 @@ class RecurrentQRC:
     h_optimizer: Optimizer
     epsilon_schedule: Callable
 
-    def _q_apply(
-        self, params: PyTree, carry: PyTree, timestep: Timestep
-    ) -> tuple[PyTree, Array]:
-        return self.q_network.apply(
-            params,
-            carry,
-            timestep.obs,
-            timestep.action,
-            timestep.reward,
-            timestep.done,
-        )
-
-    def _h_apply(
-        self, params: PyTree, carry: PyTree, timestep: Timestep
-    ) -> tuple[PyTree, Array]:
-        return self.h_network.apply(
-            params,
-            carry,
-            timestep.obs,
-            timestep.action,
-            timestep.reward,
-            timestep.done,
-        )
-
-    def _reset_carry(self, carry: PyTree, done: Array) -> PyTree:
-        return jax.tree.map(
-            lambda leaf: jnp.where(broadcast(done, leaf), jnp.zeros_like(leaf), leaf),
-            carry,
-        )
-
     def _greedy_action(
-        self, key: Key, state: RecurrentQRCState, q_values: Array
-    ) -> tuple[RecurrentQRCState, Array, Array]:
+        self, key: Key, state: QRCLambdaState
+    ) -> tuple[QRCLambdaState, Array, Array]:
+        q_values = self.q_network.apply(state.q_params, state.timestep.obs)
         action = jnp.argmax(q_values, axis=-1)
         return (
             state,
@@ -100,8 +69,8 @@ class RecurrentQRC:
         )
 
     def _random_action(
-        self, key: Key, state: RecurrentQRCState, q_values: Array
-    ) -> tuple[RecurrentQRCState, Array, Array]:
+        self, key: Key, state: QRCLambdaState
+    ) -> tuple[QRCLambdaState, Array, Array]:
         action_space = self.env.action_space(self.env_params)
         action = jax.random.randint(
             key,
@@ -112,11 +81,11 @@ class RecurrentQRC:
         return state, action, jnp.ones(self.cfg.num_envs, dtype=jnp.bool_)
 
     def _epsilon_greedy_action(
-        self, key: Key, state: RecurrentQRCState, q_values: Array
-    ) -> tuple[RecurrentQRCState, Array, Array]:
+        self, key: Key, state: QRCLambdaState
+    ) -> tuple[QRCLambdaState, Array, Array]:
         random_key, greedy_key, sample_key = jax.random.split(key, 3)
-        state, random_action, _ = self._random_action(random_key, state, q_values)
-        state, greedy_action, _ = self._greedy_action(greedy_key, state, q_values)
+        state, random_action, _ = self._random_action(random_key, state)
+        state, greedy_action, _ = self._greedy_action(greedy_key, state)
 
         epsilon = self.epsilon_schedule(state.step)
         is_random = jax.random.uniform(sample_key, (self.cfg.num_envs,)) < epsilon
@@ -127,18 +96,10 @@ class RecurrentQRC:
         return state, action, non_greedy
 
     def _step(
-        self, state: RecurrentQRCState, key: Key, *, policy: Callable
-    ) -> tuple[RecurrentQRCState, Transition]:
+        self, state: QRCLambdaState, key: Key, *, policy: Callable
+    ) -> tuple[QRCLambdaState, Transition]:
         action_key, step_key = jax.random.split(key)
-
-        # Advance both recurrent cores through the current observation.
-        q_carry_next, q_values = self._q_apply(
-            state.q_params, state.q_carry, state.timestep
-        )
-        h_carry_next, _ = self._h_apply(
-            state.h_params, state.h_carry, state.timestep
-        )
-        state, action, non_greedy = policy(action_key, state, q_values)
+        state, action, non_greedy = policy(action_key, state)
 
         step_keys = jax.random.split(step_key, self.cfg.num_envs)
         next_obs, env_state, reward, done, info = jax.vmap(
@@ -150,12 +111,7 @@ class RecurrentQRC:
         transition = Transition(
             first=state.timestep,
             second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
-            aux={
-                "non_greedy": non_greedy,
-                "q_carry_in": state.q_carry,
-                "q_carry_next": q_carry_next,
-                "h_carry_in": state.h_carry,
-            },
+            aux={"non_greedy": non_greedy},
         )
 
         return (
@@ -167,34 +123,29 @@ class RecurrentQRC:
                     reward=jnp.where(done, jnp.zeros_like(reward), reward),
                     done=done,
                 ),
-                q_carry=self._reset_carry(q_carry_next, done),
-                h_carry=self._reset_carry(h_carry_next, done),
                 env_state=env_state,
             ),
             transition,
         )
 
     def _update_step(
-        self, state: RecurrentQRCState, key: Key, *, policy: Callable
-    ) -> tuple[RecurrentQRCState, None]:
+        self, state: QRCLambdaState, key: Key, *, policy: Callable
+    ) -> tuple[QRCLambdaState, None]:
         step_key, _ = jax.random.split(key)
         state, transition = self._step(state, step_key, policy=policy)
         state = self._update(state, transition)
         return state.replace(update_step=state.update_step + 1), None
 
-    def _update(self, state: RecurrentQRCState, transition: Transition) -> RecurrentQRCState:
+    def _update(self, state: QRCLambdaState, transition: Transition) -> QRCLambdaState:
         action = transition.second.action
         non_greedy = transition.aux["non_greedy"]
-        q_carry_in = transition.aux["q_carry_in"]
-        q_carry_next = transition.aux["q_carry_next"]
-        h_carry_in = transition.aux["h_carry_in"]
 
         def compute_td_error(params):
-            _, q_values = self._q_apply(params, q_carry_in, transition.first)
+            q_values = self.q_network.apply(params, transition.first.obs)
             q_value = jnp.take_along_axis(
                 q_values, action[:, None], axis=-1
             ).squeeze(-1)
-            _, next_q_values = self._q_apply(params, q_carry_next, transition.second)
+            next_q_values = self.q_network.apply(params, transition.second.obs)
             next_value = next_q_values.max(axis=-1)
             td_error = (
                 transition.second.reward
@@ -214,7 +165,7 @@ class RecurrentQRC:
         (td_grads,) = jax.vmap(q_vjp)((zeros, eye))
 
         def compute_h(params):
-            _, h_values = self._h_apply(params, h_carry_in, transition.first)
+            h_values = self.h_network.apply(params, transition.first.obs)
             h_value = jnp.take_along_axis(
                 h_values, action[:, None], axis=-1
             ).squeeze(-1)
@@ -234,20 +185,6 @@ class RecurrentQRC:
         )
         bias_trace = discount * state.bias_trace + h_values
 
-        q_updates = jax.tree.map(
-            lambda td_g: -broadcast(bias_trace, td_g) * td_g, td_grads
-        )
-
-        if self.cfg.gradient_correction:
-            q_updates = jax.tree.map(
-                lambda update, t, g: update
-                + broadcast(td_errors, t) * t
-                - broadcast(h_values, g) * g,
-                q_updates,
-                q_trace,
-                q_grads,
-            )
-
         h_updates = jax.tree.map(
             lambda t, g, p: broadcast(td_errors, t) * t
             - broadcast(h_values, g) * g
@@ -256,18 +193,67 @@ class RecurrentQRC:
             h_grads,
             state.h_params,
         )
-
-        q_grads_final = jax.tree.map(lambda x: -x.mean(axis=0), q_updates)
         h_grads_final = jax.tree.map(lambda x: -x.mean(axis=0), h_updates)
-
-        q_param_updates, q_optimizer_state = self.q_optimizer.update(
-            state.q_optimizer_state, q_grads_final
-        )
         h_param_updates, h_optimizer_state = self.h_optimizer.update(
             state.h_optimizer_state, h_grads_final
         )
-        q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_param_updates)
         h_params = jax.tree.map(lambda p, u: p + u, state.h_params, h_param_updates)
+
+        if isinstance(self.q_optimizer, Implicit):
+            assert self.cfg.gradient_correction, (
+                "QRCLambda with the Implicit q-optimizer requires gradient_correction=True; "
+                "the implicit step is derived for the full direction delta z - h g - e_h b."
+            )
+            rho_trace = self.q_optimizer.precondition(
+                state.q_optimizer_state, q_trace
+            )
+            curvature = -sum(
+                jnp.sum(b * z, axis=tuple(range(1, b.ndim)))
+                for b, z in zip(
+                    jax.tree.leaves(td_grads), jax.tree.leaves(rho_trace)
+                )
+            )
+            q_param_updates, q_optimizer_state = self.q_optimizer.update(
+                state.q_optimizer_state,
+                q_grads,
+                q_trace,
+                td_errors,
+                curvature,
+                td_error_grad=td_grads,
+                h_value=h_values,
+                bias_trace=bias_trace,
+            )
+            q_grads_final = jax.tree.map(
+                lambda z, g, b: (
+                    broadcast(td_errors, z) * z
+                    - broadcast(h_values, g) * g
+                    - broadcast(bias_trace, b) * b
+                ).mean(axis=0),
+                q_trace,
+                q_grads,
+                td_grads,
+            )
+        else:
+            q_updates = jax.tree.map(
+                lambda td_g: -broadcast(bias_trace, td_g) * td_g, td_grads
+            )
+
+            if self.cfg.gradient_correction:
+                q_updates = jax.tree.map(
+                    lambda update, t, g: update
+                    + broadcast(td_errors, t) * t
+                    - broadcast(h_values, g) * g,
+                    q_updates,
+                    q_trace,
+                    q_grads,
+                )
+
+            q_grads_final = jax.tree.map(lambda x: -x.mean(axis=0), q_updates)
+            q_param_updates, q_optimizer_state = self.q_optimizer.update(
+                state.q_optimizer_state, q_grads_final
+            )
+
+        q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_param_updates)
 
         new_q_trace = jax.tree.map(
             lambda t: jnp.where(broadcast(reset_trace, t), jnp.zeros_like(t), t),
@@ -308,8 +294,8 @@ class RecurrentQRC:
             bias_trace=new_bias_trace,
         )
 
-    def init(self, key: Key) -> RecurrentQRCState:
-        env_key, q_key, h_key, q_carry_key, h_carry_key = jax.random.split(key, 5)
+    def init(self, key: Key) -> QRCLambdaState:
+        env_key, q_key, h_key = jax.random.split(key, 3)
         env_keys = jax.random.split(env_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             env_keys, self.env_params
@@ -322,14 +308,8 @@ class RecurrentQRC:
         done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
         timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
 
-        q_carry = self.q_network.initialize_carry(q_carry_key, self.cfg.num_envs)
-        h_carry = self.h_network.initialize_carry(h_carry_key, self.cfg.num_envs)
-        q_params = self.q_network.init(
-            q_key, q_carry, timestep.obs, timestep.action, timestep.reward, timestep.done
-        )
-        h_params = self.h_network.init(
-            h_key, h_carry, timestep.obs, timestep.action, timestep.reward, timestep.done
-        )
+        q_params = self.q_network.init(q_key, obs)
+        h_params = self.h_network.init(h_key, obs)
         q_optimizer_state = self.q_optimizer.init(q_params, self.cfg.num_envs)
         h_optimizer_state = self.h_optimizer.init(h_params, self.cfg.num_envs)
 
@@ -343,12 +323,10 @@ class RecurrentQRC:
         )
         bias_trace = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
 
-        return RecurrentQRCState(
+        return QRCLambdaState(
             step=0,
             update_step=0,
             timestep=timestep,
-            q_carry=q_carry,
-            h_carry=h_carry,
             env_state=env_state,
             q_params=q_params,
             h_params=h_params,
@@ -359,9 +337,7 @@ class RecurrentQRC:
             bias_trace=bias_trace,
         )
 
-    def warmup(
-        self, key: Key, state: RecurrentQRCState, num_steps: int
-    ) -> RecurrentQRCState:
+    def warmup(self, key: Key, state: QRCLambdaState, num_steps: int) -> QRCLambdaState:
         step_keys = jax.random.split(key, num_steps // self.cfg.num_envs)
         state, _ = jax.lax.scan(
             partial(self._step, policy=self._random_action),
@@ -371,9 +347,7 @@ class RecurrentQRC:
         )
         return state
 
-    def train(
-        self, key: Key, state: RecurrentQRCState, num_steps: int
-    ) -> RecurrentQRCState:
+    def train(self, key: Key, state: QRCLambdaState, num_steps: int) -> QRCLambdaState:
         keys = jax.random.split(key, num_steps // self.cfg.num_envs)
         state, _ = jax.lax.scan(
             partial(self._update_step, policy=self._epsilon_greedy_action),
@@ -384,13 +358,9 @@ class RecurrentQRC:
         return state
 
     def evaluate(
-        self,
-        key: Key,
-        state: RecurrentQRCState,
-        num_steps: int,
-        deterministic: bool = True,
-    ) -> RecurrentQRCState:
-        reset_key, q_carry_key, h_carry_key, eval_key = jax.random.split(key, 4)
+        self, key: Key, state: QRCLambdaState, num_steps: int, deterministic: bool = True
+    ) -> QRCLambdaState:
+        reset_key, eval_key = jax.random.split(key)
         reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             reset_keys, self.env_params
@@ -406,8 +376,6 @@ class RecurrentQRC:
                 reward=jnp.zeros(self.cfg.num_envs),
                 done=jnp.ones(self.cfg.num_envs, dtype=jnp.bool_),
             ),
-            q_carry=self.q_network.initialize_carry(q_carry_key, self.cfg.num_envs),
-            h_carry=self.h_network.initialize_carry(h_carry_key, self.cfg.num_envs),
             env_state=env_state,
         )
 

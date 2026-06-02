@@ -22,7 +22,7 @@ from streax.utils.typing import (
 
 
 @struct.dataclass(frozen=True)
-class QRCConfig:
+class RecurrentQRCLambdaConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
@@ -32,10 +32,12 @@ class QRCConfig:
 
 
 @struct.dataclass(frozen=True)
-class QRCState:
+class RecurrentQRCLambdaState:
     step: int
     update_step: int
     timestep: Timestep
+    q_carry: PyTree
+    h_carry: PyTree
     env_state: EnvState
     q_params: core.FrozenDict[str, Any]
     h_params: core.FrozenDict[str, Any]
@@ -47,8 +49,8 @@ class QRCState:
 
 
 @dataclass
-class QRC:
-    cfg: QRCConfig
+class RecurrentQRCLambda:
+    cfg: RecurrentQRCLambdaConfig
     env: Environment
     env_params: EnvParams
     q_network: nn.Module
@@ -57,10 +59,39 @@ class QRC:
     h_optimizer: Optimizer
     epsilon_schedule: Callable
 
+    def _q_apply(
+        self, params: PyTree, carry: PyTree, timestep: Timestep
+    ) -> tuple[PyTree, Array]:
+        return self.q_network.apply(
+            params,
+            carry,
+            timestep.obs,
+            timestep.action,
+            timestep.reward,
+            timestep.done,
+        )
+
+    def _h_apply(
+        self, params: PyTree, carry: PyTree, timestep: Timestep
+    ) -> tuple[PyTree, Array]:
+        return self.h_network.apply(
+            params,
+            carry,
+            timestep.obs,
+            timestep.action,
+            timestep.reward,
+            timestep.done,
+        )
+
+    def _reset_carry(self, carry: PyTree, done: Array) -> PyTree:
+        return jax.tree.map(
+            lambda leaf: jnp.where(broadcast(done, leaf), jnp.zeros_like(leaf), leaf),
+            carry,
+        )
+
     def _greedy_action(
-        self, key: Key, state: QRCState
-    ) -> tuple[QRCState, Array, Array]:
-        q_values = self.q_network.apply(state.q_params, state.timestep.obs)
+        self, key: Key, state: RecurrentQRCLambdaState, q_values: Array
+    ) -> tuple[RecurrentQRCLambdaState, Array, Array]:
         action = jnp.argmax(q_values, axis=-1)
         return (
             state,
@@ -69,8 +100,8 @@ class QRC:
         )
 
     def _random_action(
-        self, key: Key, state: QRCState
-    ) -> tuple[QRCState, Array, Array]:
+        self, key: Key, state: RecurrentQRCLambdaState, q_values: Array
+    ) -> tuple[RecurrentQRCLambdaState, Array, Array]:
         action_space = self.env.action_space(self.env_params)
         action = jax.random.randint(
             key,
@@ -81,11 +112,11 @@ class QRC:
         return state, action, jnp.ones(self.cfg.num_envs, dtype=jnp.bool_)
 
     def _epsilon_greedy_action(
-        self, key: Key, state: QRCState
-    ) -> tuple[QRCState, Array, Array]:
+        self, key: Key, state: RecurrentQRCLambdaState, q_values: Array
+    ) -> tuple[RecurrentQRCLambdaState, Array, Array]:
         random_key, greedy_key, sample_key = jax.random.split(key, 3)
-        state, random_action, _ = self._random_action(random_key, state)
-        state, greedy_action, _ = self._greedy_action(greedy_key, state)
+        state, random_action, _ = self._random_action(random_key, state, q_values)
+        state, greedy_action, _ = self._greedy_action(greedy_key, state, q_values)
 
         epsilon = self.epsilon_schedule(state.step)
         is_random = jax.random.uniform(sample_key, (self.cfg.num_envs,)) < epsilon
@@ -96,10 +127,18 @@ class QRC:
         return state, action, non_greedy
 
     def _step(
-        self, state: QRCState, key: Key, *, policy: Callable
-    ) -> tuple[QRCState, Transition]:
+        self, state: RecurrentQRCLambdaState, key: Key, *, policy: Callable
+    ) -> tuple[RecurrentQRCLambdaState, Transition]:
         action_key, step_key = jax.random.split(key)
-        state, action, non_greedy = policy(action_key, state)
+
+        # Advance both recurrent cores through the current observation.
+        q_carry_next, q_values = self._q_apply(
+            state.q_params, state.q_carry, state.timestep
+        )
+        h_carry_next, _ = self._h_apply(
+            state.h_params, state.h_carry, state.timestep
+        )
+        state, action, non_greedy = policy(action_key, state, q_values)
 
         step_keys = jax.random.split(step_key, self.cfg.num_envs)
         next_obs, env_state, reward, done, info = jax.vmap(
@@ -111,7 +150,12 @@ class QRC:
         transition = Transition(
             first=state.timestep,
             second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
-            aux={"non_greedy": non_greedy},
+            aux={
+                "non_greedy": non_greedy,
+                "q_carry_in": state.q_carry,
+                "q_carry_next": q_carry_next,
+                "h_carry_in": state.h_carry,
+            },
         )
 
         return (
@@ -123,29 +167,34 @@ class QRC:
                     reward=jnp.where(done, jnp.zeros_like(reward), reward),
                     done=done,
                 ),
+                q_carry=self._reset_carry(q_carry_next, done),
+                h_carry=self._reset_carry(h_carry_next, done),
                 env_state=env_state,
             ),
             transition,
         )
 
     def _update_step(
-        self, state: QRCState, key: Key, *, policy: Callable
-    ) -> tuple[QRCState, None]:
+        self, state: RecurrentQRCLambdaState, key: Key, *, policy: Callable
+    ) -> tuple[RecurrentQRCLambdaState, None]:
         step_key, _ = jax.random.split(key)
         state, transition = self._step(state, step_key, policy=policy)
         state = self._update(state, transition)
         return state.replace(update_step=state.update_step + 1), None
 
-    def _update(self, state: QRCState, transition: Transition) -> QRCState:
+    def _update(self, state: RecurrentQRCLambdaState, transition: Transition) -> RecurrentQRCLambdaState:
         action = transition.second.action
         non_greedy = transition.aux["non_greedy"]
+        q_carry_in = transition.aux["q_carry_in"]
+        q_carry_next = transition.aux["q_carry_next"]
+        h_carry_in = transition.aux["h_carry_in"]
 
         def compute_td_error(params):
-            q_values = self.q_network.apply(params, transition.first.obs)
+            _, q_values = self._q_apply(params, q_carry_in, transition.first)
             q_value = jnp.take_along_axis(
                 q_values, action[:, None], axis=-1
             ).squeeze(-1)
-            next_q_values = self.q_network.apply(params, transition.second.obs)
+            _, next_q_values = self._q_apply(params, q_carry_next, transition.second)
             next_value = next_q_values.max(axis=-1)
             td_error = (
                 transition.second.reward
@@ -165,7 +214,7 @@ class QRC:
         (td_grads,) = jax.vmap(q_vjp)((zeros, eye))
 
         def compute_h(params):
-            h_values = self.h_network.apply(params, transition.first.obs)
+            _, h_values = self._h_apply(params, h_carry_in, transition.first)
             h_value = jnp.take_along_axis(
                 h_values, action[:, None], axis=-1
             ).squeeze(-1)
@@ -259,8 +308,8 @@ class QRC:
             bias_trace=new_bias_trace,
         )
 
-    def init(self, key: Key) -> QRCState:
-        env_key, q_key, h_key = jax.random.split(key, 3)
+    def init(self, key: Key) -> RecurrentQRCLambdaState:
+        env_key, q_key, h_key, q_carry_key, h_carry_key = jax.random.split(key, 5)
         env_keys = jax.random.split(env_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             env_keys, self.env_params
@@ -273,8 +322,14 @@ class QRC:
         done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
         timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
 
-        q_params = self.q_network.init(q_key, obs)
-        h_params = self.h_network.init(h_key, obs)
+        q_carry = self.q_network.initialize_carry(q_carry_key, self.cfg.num_envs)
+        h_carry = self.h_network.initialize_carry(h_carry_key, self.cfg.num_envs)
+        q_params = self.q_network.init(
+            q_key, q_carry, timestep.obs, timestep.action, timestep.reward, timestep.done
+        )
+        h_params = self.h_network.init(
+            h_key, h_carry, timestep.obs, timestep.action, timestep.reward, timestep.done
+        )
         q_optimizer_state = self.q_optimizer.init(q_params, self.cfg.num_envs)
         h_optimizer_state = self.h_optimizer.init(h_params, self.cfg.num_envs)
 
@@ -288,10 +343,12 @@ class QRC:
         )
         bias_trace = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
 
-        return QRCState(
+        return RecurrentQRCLambdaState(
             step=0,
             update_step=0,
             timestep=timestep,
+            q_carry=q_carry,
+            h_carry=h_carry,
             env_state=env_state,
             q_params=q_params,
             h_params=h_params,
@@ -302,7 +359,9 @@ class QRC:
             bias_trace=bias_trace,
         )
 
-    def warmup(self, key: Key, state: QRCState, num_steps: int) -> QRCState:
+    def warmup(
+        self, key: Key, state: RecurrentQRCLambdaState, num_steps: int
+    ) -> RecurrentQRCLambdaState:
         step_keys = jax.random.split(key, num_steps // self.cfg.num_envs)
         state, _ = jax.lax.scan(
             partial(self._step, policy=self._random_action),
@@ -312,7 +371,9 @@ class QRC:
         )
         return state
 
-    def train(self, key: Key, state: QRCState, num_steps: int) -> QRCState:
+    def train(
+        self, key: Key, state: RecurrentQRCLambdaState, num_steps: int
+    ) -> RecurrentQRCLambdaState:
         keys = jax.random.split(key, num_steps // self.cfg.num_envs)
         state, _ = jax.lax.scan(
             partial(self._update_step, policy=self._epsilon_greedy_action),
@@ -323,9 +384,13 @@ class QRC:
         return state
 
     def evaluate(
-        self, key: Key, state: QRCState, num_steps: int, deterministic: bool = True
-    ) -> QRCState:
-        reset_key, eval_key = jax.random.split(key)
+        self,
+        key: Key,
+        state: RecurrentQRCLambdaState,
+        num_steps: int,
+        deterministic: bool = True,
+    ) -> RecurrentQRCLambdaState:
+        reset_key, q_carry_key, h_carry_key, eval_key = jax.random.split(key, 4)
         reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
         obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
             reset_keys, self.env_params
@@ -341,6 +406,8 @@ class QRC:
                 reward=jnp.zeros(self.cfg.num_envs),
                 done=jnp.ones(self.cfg.num_envs, dtype=jnp.bool_),
             ),
+            q_carry=self.q_network.initialize_carry(q_carry_key, self.cfg.num_envs),
+            h_carry=self.h_network.initialize_carry(h_carry_key, self.cfg.num_envs),
             env_state=env_state,
         )
 
