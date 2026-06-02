@@ -35,7 +35,7 @@ parser.add_argument(
     help="MinAtar environment to train on.",
 )
 parser.add_argument(
-    "--lr", type=float, default=0.0001, help="Implicit optimizer learning rate."
+    "--lr", type=float, default=0.5, help="Implicit step-size scale (eta)."
 )
 args = parser.parse_args()
 
