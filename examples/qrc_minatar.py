@@ -113,7 +113,7 @@ agent = QRCLambda(
 
 
 init = jax.vmap(agent.init)
-train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
+train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2)
 
 group = f"qrc__{env_id}__sgd"
 
@@ -153,6 +153,7 @@ logger = MultiLogger(loggers)
 key = jax.random.key(seed)
 key, init_key = jax.random.split(key)
 state = init(jax.random.split(init_key, num_seeds))
+state = jax.tree.map(lambda x: jax.lax.convert_element_type(x, x.dtype), state)
 
 for i in range(num_epochs):
     start = time.perf_counter()

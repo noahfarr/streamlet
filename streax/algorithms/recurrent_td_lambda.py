@@ -8,7 +8,7 @@ import lox
 import optax
 from flax import core, struct
 
-from streax.optimizers import Calibrated, Implicit, ObGD, Optimizer
+from streax.optimizers import AlphaBound, Calibrated, Implicit, ObGD, Optimizer
 from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
 from streax.utils.typing import (
     Array,
@@ -145,7 +145,7 @@ class RecurrentTDLambda:
             lambda t, g: broadcast(discount, t) * t + g, state.value_trace, value_grads
         )
 
-        if isinstance(self.value_optimizer, (Implicit, Calibrated)) or (
+        if isinstance(self.value_optimizer, (Implicit, Calibrated, AlphaBound)) or (
             isinstance(self.value_optimizer, ObGD) and self.value_optimizer.cfg.exact
         ):
             interaction_trace = value_trace

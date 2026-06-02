@@ -125,7 +125,7 @@ def run(env_id, opt_name, q_optimizer, use_wandb):
     )
 
     init = jax.vmap(agent.init)
-    train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
+    train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2)
 
     group = f"q_lambda__{env_id}__{opt_name}"
 
@@ -167,6 +167,7 @@ def run(env_id, opt_name, q_optimizer, use_wandb):
     key = jax.random.key(seed)
     key, init_key = jax.random.split(key)
     state = init(jax.random.split(init_key, num_seeds))
+    state = jax.tree.map(lambda x: jax.lax.convert_element_type(x, x.dtype), state)
 
     for _ in range(num_epochs):
         start = time.perf_counter()

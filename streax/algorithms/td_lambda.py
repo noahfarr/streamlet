@@ -9,7 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
-from streax.optimizers import Implicit, Calibrated, ObGD, Optimizer
+from streax.optimizers import AlphaBound, Implicit, Calibrated, ObGD, Optimizer
 from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
 from streax.utils.typing import (
     Array,
@@ -116,7 +116,7 @@ class TDLambda:
             lambda t, g: broadcast(discount, t) * t + g, state.value_trace, value_grads
         )
 
-        if isinstance(self.value_optimizer, (Implicit, Calibrated)) or (
+        if isinstance(self.value_optimizer, (Implicit, Calibrated, AlphaBound)) or (
             isinstance(self.value_optimizer, ObGD) and self.value_optimizer.cfg.exact
         ):
             interaction_trace = value_trace
@@ -182,6 +182,7 @@ class TDLambda:
             "value/value": next_value.mean(),
             "value/td_error": td_error.mean(),
             "value/cumulant": transition.second.reward.mean(),
+            "value/weight_norm_sq": optax.global_norm(value_params) ** 2,
             "value_trace/trace_norm": optax.global_norm(new_value_trace),
         }
         lox.log(log_dict)

@@ -21,6 +21,7 @@ class CalibratedConfig:
     huber_delta: float = 1.0
     precondition: bool = struct.field(pytree_node=False, default=False)
     beta2: float = 0.999
+    precondition_eps: float = 0.1
     adaptive_clip: bool = struct.field(pytree_node=False, default=False)
     clip_multiplier: float = 20.0
     beta_clip: float = 0.999
@@ -46,7 +47,7 @@ class Calibrated:
         v = None
         if self.cfg.precondition:
             v = jax.tree.map(
-                lambda p: jnp.ones((num_envs, *p.shape), dtype=jnp.float32),
+                lambda p: jnp.zeros((num_envs, *p.shape), dtype=jnp.float32),
                 parameters,
             )
         d_hat = None
@@ -65,9 +66,14 @@ class Calibrated:
     def precondition(self, state: CalibratedState, trace: PyTree) -> PyTree:
         if not self.cfg.precondition:
             return trace
-        return jax.tree.map(
-            lambda v, t: t / (jnp.sqrt(v) + self.cfg.eps), state.v, trace
-        )
+        has_grads = state.step > 0
+        bias = jnp.where(has_grads, 1.0 - self.cfg.beta2**state.step, 1.0)
+
+        def rescale(v, t):
+            v_hat = v / bias
+            return jnp.where(has_grads, t / (jnp.sqrt(v_hat) + self.cfg.precondition_eps), t)
+
+        return jax.tree.map(rescale, state.v, trace)
 
     def update(
         self,

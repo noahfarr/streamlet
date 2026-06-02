@@ -9,7 +9,7 @@ import lox
 import optax
 from flax import core, struct
 
-from streax.optimizers import Calibrated, Implicit, ObGD, Optimizer
+from streax.optimizers import AlphaBound, Calibrated, Implicit, ObGD, Optimizer
 from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
 from streax.utils.typing import (
     Array,
@@ -192,7 +192,7 @@ class RecurrentQLambda:
             lambda t, g: broadcast(discount, t) * t + g, state.q_trace, q_grads
         )
 
-        if isinstance(self.q_optimizer, (Implicit, Calibrated)) or (
+        if isinstance(self.q_optimizer, (Implicit, Calibrated, AlphaBound)) or (
             isinstance(self.q_optimizer, ObGD) and self.q_optimizer.cfg.exact
         ):
             interaction_trace = q_trace

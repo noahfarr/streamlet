@@ -81,11 +81,12 @@ def evaluate(value_optimizer):
     agent = TDLambda(config, env, env_params, value_network(), value_optimizer)
 
     init = jax.vmap(agent.init)
-    train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
+    train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2)
 
     key = jax.random.key(seed)
     key, init_key = jax.random.split(key)
     state = init(jax.random.split(init_key, num_seeds))
+    state = jax.tree.map(lambda x: jax.lax.convert_element_type(x, x.dtype), state)
 
     key, train_key = jax.random.split(key)
     state, logs = train(jax.random.split(train_key, num_seeds), state, total_steps)

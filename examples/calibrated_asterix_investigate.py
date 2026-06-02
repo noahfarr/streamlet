@@ -115,11 +115,12 @@ def run_config(name, optimizer, env, env_params, num_actions, init_key, train_ke
     agent = QLambda(config, env, env_params, network, epsilon_schedule, optimizer)
 
     init = jax.vmap(agent.init)
-    train = jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None))
+    train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2)
 
     # SAME init/train keys across configs -> identical network init and env-seed
     # stream; only the learning rule differs.
     state = init(jax.random.split(init_key, args.num_seeds))
+    state = jax.tree.map(lambda x: jax.lax.convert_element_type(x, x.dtype), state)
     state, logs = train(jax.random.split(train_key, args.num_seeds), state, args.steps)
     jax.block_until_ready((state, logs))
 
