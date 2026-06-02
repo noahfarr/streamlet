@@ -38,7 +38,7 @@ total_timesteps = 5_000_000
 num_epochs = 100
 num_steps = total_timesteps // num_epochs
 seed = 0
-num_seeds = 5
+num_seeds = 10
 env_id = args.env_id
 
 gamma = 0.99

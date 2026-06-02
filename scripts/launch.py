@@ -31,7 +31,7 @@ DEVICE_PRESETS = {
     "gpu": dict(
         n_cpus=4,
         n_gpus=1,
-        mem=8000,
+        mem=16000,
         max_runtime_minutes=6 * 60,
         env={
             "JAX_PLATFORMS": "cuda,cpu",
