@@ -80,6 +80,7 @@ q_optimizer = Adaptive(
         eps=0.1,
         clip=1.0,
     ),
+    name="q_optimizer",
 )
 
 epsilon_start = 1.0
@@ -130,9 +131,9 @@ if args.wandb:
                 "env_id": env_id,
                 "total_timesteps": total_timesteps,
                 **dataclasses.asdict(config),
-                "optimizer": q_optimizer.name,
+                "q_optimizer": q_optimizer.name,
                 **{
-                    f"optimizer/{k}": v
+                    f"q_optimizer/{k}": v
                     for k, v in dataclasses.asdict(q_optimizer.cfg).items()
                 },
             },

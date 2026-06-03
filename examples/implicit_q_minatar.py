@@ -75,7 +75,8 @@ q_network = nn.Sequential(
 )
 
 q_optimizer = Implicit(
-    cfg=ImplicitConfig(gamma=0.99, trace_lambda=0.8, eta=args.lr)
+    cfg=ImplicitConfig(gamma=0.99, trace_lambda=0.8, eta=args.lr),
+    name="q_optimizer",
 )
 
 epsilon_start = 1.0
@@ -126,9 +127,9 @@ if args.wandb:
                 "env_id": env_id,
                 "total_timesteps": total_timesteps,
                 **dataclasses.asdict(config),
-                "optimizer": q_optimizer.name,
+                "q_optimizer": q_optimizer.name,
                 **{
-                    f"optimizer/{k}": v
+                    f"q_optimizer/{k}": v
                     for k, v in dataclasses.asdict(q_optimizer.cfg).items()
                 },
             },

@@ -81,7 +81,7 @@ def value_network():
 
 env, env_params = build_env()
 config = TDLambdaConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
-value_optimizer = Calibrated(cfg=CalibratedConfig(nu=nu, beta=beta))
+value_optimizer = Calibrated(cfg=CalibratedConfig(nu=nu, beta=beta), name="value_optimizer")
 agent = TDLambda(config, env, env_params, value_network(), value_optimizer)
 
 init = jax.vmap(agent.init)

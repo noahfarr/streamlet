@@ -73,7 +73,8 @@ def value_network():
 env, env_params = build_env()
 config = TDLambdaConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
 value_optimizer = Implicit(
-    cfg=ImplicitConfig(gamma=gamma, trace_lambda=trace_lambda, eta=lr)
+    cfg=ImplicitConfig(gamma=gamma, trace_lambda=trace_lambda, eta=lr),
+    name="value_optimizer",
 )
 agent = TDLambda(config, env, env_params, value_network(), value_optimizer)
 

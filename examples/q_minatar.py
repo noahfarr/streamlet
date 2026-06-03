@@ -48,14 +48,14 @@ ENV_IDS = [
 
 # Each entry builds a fresh optimizer instance with its tuned hyperparameters.
 OPTIMIZERS = {
-    "calibrated": lambda: Calibrated(cfg=CalibratedConfig(), name="optimizer"),
+    "calibrated": lambda: Calibrated(cfg=CalibratedConfig(), name="q_optimizer"),
     "implicit": lambda: Implicit(
         cfg=ImplicitConfig(gamma=gamma, trace_lambda=trace_lambda, eta=0.25),
-        name="optimizer",
+        name="q_optimizer",
     ),
     "intentional": lambda: Intentional(
         cfg=IntentionalConfig(gamma=gamma, trace_lambda=trace_lambda, eta=0.25),
-        name="optimizer",
+        name="q_optimizer",
     ),
     "adaptive": lambda: Adaptive(
         cfg=AdaptiveConfig(
@@ -65,11 +65,11 @@ OPTIMIZERS = {
             eps=0.1,
             clip=1.0,
         ),
-        name="optimizer",
+        name="q_optimizer",
     ),
     "obgd": lambda: ObGD(
         cfg=ObGDConfig(lr=1.0, kappa=2.0, beta2=0.999, eps=1e-8, adaptive=False),
-        name="optimizer",
+        name="q_optimizer",
     ),
 }
 
@@ -152,9 +152,9 @@ def run(env_id, opt_name, q_optimizer, use_wandb):
                     "env_id": env_id,
                     "total_timesteps": total_timesteps,
                     **dataclasses.asdict(config),
-                    "optimizer": opt_name,
+                    "q_optimizer": opt_name,
                     **{
-                        f"optimizer/{k}": v
+                        f"q_optimizer/{k}": v
                         for k, v in dataclasses.asdict(q_optimizer.cfg).items()
                     },
                 },
@@ -246,7 +246,7 @@ def main():
             adaptive=False,
             exact=args.exact,
         ),
-        name="optimizer",
+        name="q_optimizer",
     )
 
     for opt_name in args.optimizers:

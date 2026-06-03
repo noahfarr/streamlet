@@ -93,6 +93,7 @@ actor_optimizer = ObGD(
         eps=1e-8,
         adaptive=False,
     ),
+    name="actor_optimizer",
 )
 critic_optimizer = ObGD(
     cfg=ObGDConfig(
@@ -102,6 +103,7 @@ critic_optimizer = ObGD(
         eps=1e-8,
         adaptive=False,
     ),
+    name="critic_optimizer",
 )
 
 agent = ACLambda(

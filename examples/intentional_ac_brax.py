@@ -102,6 +102,7 @@ actor_optimizer = Intentional(
         eta=0.05,
         normalize_delta=True,
     ),
+    name="actor_optimizer",
 )
 critic_optimizer = Intentional(
     cfg=IntentionalConfig(
@@ -109,6 +110,7 @@ critic_optimizer = Intentional(
         trace_lambda=trace_lambda,
         eta=0.5,
     ),
+    name="critic_optimizer",
 )
 
 agent = ACLambda(

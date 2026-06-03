@@ -118,8 +118,8 @@ critic_network = nn.Sequential(
     ]
 )
 
-actor_optimizer = OptaxOptimizer(optax.adam(actor_lr, b1=beta1, b2=beta2, eps=eps))
-critic_optimizer = OptaxOptimizer(optax.adam(critic_lr, b1=beta1, b2=beta2, eps=eps))
+actor_optimizer = OptaxOptimizer(optax.adam(actor_lr, b1=beta1, b2=beta2, eps=eps), name="actor_optimizer")
+critic_optimizer = OptaxOptimizer(optax.adam(critic_lr, b1=beta1, b2=beta2, eps=eps), name="critic_optimizer")
 
 agent = AVGLambda(
     config,

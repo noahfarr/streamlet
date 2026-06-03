@@ -130,6 +130,7 @@ q_optimizer = ObGD(
         adaptive=False,
         exact=args.exact,
     ),
+    name="q_optimizer",
 )
 
 epsilon_start = 1.0
@@ -181,9 +182,9 @@ if args.wandb:
                 "total_timesteps": total_timesteps,
                 "hidden_size": args.hidden_size,
                 **dataclasses.asdict(config),
-                "optimizer": q_optimizer.name,
+                "q_optimizer": q_optimizer.name,
                 **{
-                    f"optimizer/{k}": v
+                    f"q_optimizer/{k}": v
                     for k, v in dataclasses.asdict(q_optimizer.cfg).items()
                 },
             },
