@@ -181,24 +181,22 @@ for i in range(num_epochs):
     SPS = int(num_steps / (end - start))
 
     mask = logs.pop("returned_episode")
-    axes = tuple(range(1, mask.ndim))
-    episode_returns = jnp.mean(
-        logs.pop("returned_episode_returns"), axis=axes, where=mask
-    )
-    episode_lengths = jnp.mean(
-        logs.pop("returned_episode_lengths"), axis=axes, where=mask
-    )
-    discounted_episode_returns = jnp.mean(
-        logs.pop("returned_discounted_episode_returns"), axis=axes, where=mask
+    episode_returns = jnp.where(mask, logs.pop("returned_episode_returns"), jnp.nan)
+    episode_lengths = jnp.where(mask, logs.pop("returned_episode_lengths"), jnp.nan)
+    discounted_episode_returns = jnp.where(
+        mask, logs.pop("returned_discounted_episode_returns"), jnp.nan
     )
 
+    sps = jnp.full((num_seeds, num_steps), jnp.nan).at[:, -1].set(SPS)
+
     data = {
-        "training/SPS": SPS,
+        "training/SPS": sps,
         "training/episode_returns": episode_returns,
         "training/episode_lengths": episode_lengths,
         "training/discounted_episode_returns": discounted_episode_returns,
         **logs,
     }
-    logger.log(data, step=state.step.mean(dtype=jnp.int32).item())
+    steps = i * num_steps + jnp.arange(num_steps)
+    logger.log(data, steps)
 
 logger.finish()

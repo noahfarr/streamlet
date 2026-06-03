@@ -54,10 +54,39 @@ class DashboardLogger:
         )
         self.live.start()
 
-    def log(self, data: PyTree, step: int, **kwargs) -> None:
-        self.progress.update(self.progress_task, completed=int(step))
-        dashboard = self.build_dashboard(data, step, self.progress, self.progress_task)
+    def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
+        """Render a snapshot of a per-timestep sequence.
+
+        Leaves are ``(num_seeds, T, *rest)``; the trailing ``*rest`` axes are
+        reduced with ``nanmean`` and the most recent finite value along ``T`` is
+        kept per seed, giving a ``(num_seeds,)`` snapshot per key (the table then
+        shows ``mean ± std`` across seeds). ``NaN``-only keys are dropped.
+        """
+        steps = jnp.asarray(steps).reshape(-1)
+        step = int(steps[-1])
+        snapshot = {
+            "/".join(str(p.key) for p in path): self._last_finite(leaf)
+            for path, leaf in jax.tree_util.tree_leaves_with_path(data)
+        }
+        snapshot = {k: v for k, v in snapshot.items() if v is not None}
+        self.progress.update(self.progress_task, completed=step)
+        dashboard = self.build_dashboard(
+            snapshot, step, self.progress, self.progress_task
+        )
         self.live.update(dashboard, refresh=True)
+
+    @staticmethod
+    def _last_finite(leaf: PyTree):
+        """Reduce a ``(num_seeds, T, *rest)`` leaf to the most recent finite
+        per-seed value, or ``None`` if no finite value exists."""
+        leaf = jnp.asarray(leaf)
+        reduced = jnp.nanmean(leaf, axis=tuple(range(2, leaf.ndim)))  # (S, T)
+        finite = jnp.isfinite(reduced)
+        if not bool(jnp.any(finite)):
+            return None
+        # index of the last finite step per seed (0 if a seed has none)
+        last = (reduced.shape[1] - 1) - jnp.argmax(finite[:, ::-1], axis=1)
+        return jnp.take_along_axis(reduced, last[:, None], axis=1)[:, 0]
 
     def finish(self) -> None:
         self.live.stop()

@@ -1,10 +1,11 @@
 import dataclasses
 import hashlib
+import warnings
 
 import jax
+import numpy as np
 import wandb
 
-from streax.utils.axes import ensure_axis
 from streax.utils.typing import PyTree
 
 
@@ -65,14 +66,36 @@ class WandbLogger:
             for i in range(num_seeds)
         }
 
-    def log(self, data: PyTree, step: int, **kwargs) -> None:
-        num_seeds = len(self.runs)
-        data = {
-            "/".join(str(p.key) for p in path): ensure_axis(leaf, num_seeds)
-            for path, leaf in jax.tree_util.tree_leaves_with_path(data)
-        }
+    def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
+        """Replay a per-timestep sequence into each seed's run.
+
+        Every leaf is expected to have shape ``(num_seeds, T, *rest)``; the
+        trailing ``*rest`` axes (e.g. the env axis) are reduced with ``nanmean``
+        to ``(num_seeds, T)``. ``steps`` is a length-``T`` array of absolute
+        global step indices. ``NaN`` marks "no datapoint" for a key at a given
+        ``(seed, step)`` and is skipped, so sparse episode metrics and dense
+        loss metrics can share one grid. wandb batches the uploads internally.
+        """
+        steps = np.asarray(jax.device_get(steps)).reshape(-1)
+        with warnings.catch_warnings():
+            # all-NaN env slices (steps with no finished episode) -> NaN, skipped below
+            warnings.simplefilter("ignore", RuntimeWarning)
+            data = {
+                "/".join(str(p.key) for p in path): np.nanmean(
+                    np.asarray(jax.device_get(leaf)),
+                    axis=tuple(range(2, np.ndim(leaf))),
+                )
+                for path, leaf in jax.tree_util.tree_leaves_with_path(data)
+            }
         for seed, run in self.runs.items():
-            run.log({k: v[seed].mean() for k, v in data.items()}, step=step)
+            for t, step in enumerate(steps):
+                row = {
+                    k: float(v[seed, t])
+                    for k, v in data.items()
+                    if np.isfinite(v[seed, t])
+                }
+                if row:
+                    run.log(row, step=int(step))
 
     def finish(self) -> None:
         for run in self.runs.values():
