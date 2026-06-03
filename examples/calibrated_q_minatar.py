@@ -156,7 +156,7 @@ if args.wandb:
                 "env_id": env_id,
                 "total_timesteps": total_timesteps,
                 **dataclasses.asdict(config),
-                "q_optimizer": q_optimizer.name,
+                "q_optimizer": type(q_optimizer).__name__.lower(),
                 **{
                     f"q_optimizer/{k}": v
                     for k, v in dataclasses.asdict(q_optimizer.cfg).items()

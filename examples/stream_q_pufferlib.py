@@ -3,11 +3,14 @@ import dataclasses
 import time
 
 import flax.linen as nn
+import gymnasium
 import jax
 import jax.numpy as jnp
 import lox
+import pufferlib.emulation
+import pufferlib.vector
 
-from streax.algorithms import SARSALambda, SARSALambdaConfig
+from streax.algorithms import QLambda, QLambdaConfig
 from streax.environments import environment
 from streax.environments.wrappers import (
     NormalizeObservationWrapper,
@@ -20,51 +23,54 @@ from streax.networks import Flatten, sparse
 from streax.optimizers import ObGD, ObGDConfig
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
 parser.add_argument(
-    "--env-id",
-    default="gymnax::Breakout-MinAtar",
-    choices=[
-        "gymnax::Asterix-MinAtar",
-        "gymnax::Breakout-MinAtar",
-        "gymnax::Freeway-MinAtar",
-        "gymnax::SpaceInvaders-MinAtar",
-    ],
-    help="MinAtar environment to train on.",
+    "--wandb", action="store_true", help="Enable Weights & Biases logging."
+)
+parser.add_argument(
+    "--lr",
+    type=float,
+    default=None,
+    help="ObGD base step size. Default: 1.0 for the bound, 1e-3 for --exact "
+    "(lr=1.0 diverges with --exact).",
 )
 args = parser.parse_args()
 
-total_timesteps = 5_000_000
-num_epochs = 100
+total_timesteps = 500_000
+num_epochs = 10
 num_steps = total_timesteps // num_epochs
 seed = 0
-num_seeds = 5
-env_id = args.env_id
+num_seeds = 10
+suite = "pufferlib"
+env_id = "CartPole-v1"
+num_envs = 1
 
-gamma = 0.99
-trace_lambda = 0.8
-
-env, env_params = environment.make(env_id)
+env, env_params = environment.make(
+    f"{suite}::{env_id}",
+    env_creator=pufferlib.emulation.GymnasiumPufferEnv,
+    env_kwargs={"env_creator": lambda: gymnasium.make(env_id)},
+    batch_shape=(num_seeds, num_envs),
+    backend=pufferlib.vector.Serial,
+    num_workers=1,
+)
 env = StickyActionWrapper(env)
 env = RecordEpisodeStatistics(env)
 env = NormalizeObservationWrapper(env)
-env = NormalizeRewardWrapper(env, gamma=gamma)
+env = NormalizeRewardWrapper(env)
 
 num_actions = env.action_space(env_params).n
 
-config = SARSALambdaConfig(
-    num_envs=1,
-    trace_lambda=trace_lambda,
-    gamma=gamma,
+config = QLambdaConfig(
+    num_envs=num_envs,
+    trace_lambda=0.8,
+    gamma=0.99,
 )
 
 sparse_init = sparse(sparsity=0.9)
 q_network = nn.Sequential(
     [
-        nn.Conv(16, (3, 3), strides=(1, 1), padding="VALID", kernel_init=sparse_init),
+        nn.Dense(128, kernel_init=sparse_init),
         nn.LayerNorm(),
         nn.leaky_relu,
-        Flatten(start_dim=-3),
         nn.Dense(128, kernel_init=sparse_init),
         nn.LayerNorm(),
         nn.leaky_relu,
@@ -85,7 +91,7 @@ q_optimizer = ObGD(
 
 epsilon_start = 1.0
 epsilon_end = 0.01
-exploration_fraction = 0.05
+exploration_fraction = 0.2
 exploration_steps = exploration_fraction * total_timesteps
 
 
@@ -94,7 +100,7 @@ def epsilon_schedule(step):
     return epsilon_start + frac * (epsilon_end - epsilon_start)
 
 
-agent = SARSALambda(
+agent = QLambda(
     config,
     env,
     env_params,
@@ -105,15 +111,17 @@ agent = SARSALambda(
 
 
 init = jax.vmap(agent.init)
-train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2)
+train = jax.jit(
+    jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2
+)
 
-group = f"sarsa_lambda__{env_id}__obgd"
+group = f"q_lambda__{env_id}__obgd"
 
 loggers = [
     DashboardLogger(
         total_timesteps=total_timesteps,
         summary={
-            "Algorithm": "sarsa_lambda",
+            "Algorithm": "q_lambda",
             "Environment": env_id,
             "Total Timesteps": f"{total_timesteps:_}",
         },
@@ -123,11 +131,11 @@ if args.wandb:
     loggers.append(
         WandbLogger(
             project="stremax",
-            name="stream-SARSA",
+            name="stream-Q",
             mode="online",
             group=group,
             cfg={
-                "algorithm": "sarsa_lambda",
+                "algorithm": "q_lambda",
                 "env_id": env_id,
                 "total_timesteps": total_timesteps,
                 **dataclasses.asdict(config),

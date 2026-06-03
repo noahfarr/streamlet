@@ -1,4 +1,4 @@
-from streax.environments import ale, brax, ett, gymnasium, gymnax, rarespike
+from streax.environments import ale, brax, ett, gymnasium, gymnax, pufferlib, rarespike
 
 register = {
     "gymnax": gymnax.make,
@@ -7,6 +7,7 @@ register = {
     "ale": ale.make,
     "ett": ett.make,
     "rarespike": rarespike.make,
+    "pufferlib": pufferlib.make,
 }
 
 

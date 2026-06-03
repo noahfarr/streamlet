@@ -23,10 +23,9 @@ dependencies = [
 [project.optional-dependencies]
 gymnasium = ["gymnasium"]
 ale       = ["ale-py[gymnasium]"]
-examples  = ["matplotlib"]
-# Launch-only tooling (cluster/launch.py); not needed to run the examples.
-# Uses the fork branch that adds .gitignore-aware upload filtering.
+ett  = ["matplotlib"]
 cluster   = ["slurmpilot"]
+pufferlib = ["pufferlib-core"]
 
 
 [tool.uv.sources]

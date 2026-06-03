@@ -141,12 +141,12 @@ if args.wandb:
                 "env_id": env_id,
                 "total_timesteps": total_timesteps,
                 **dataclasses.asdict(config),
-                "actor_optimizer": actor_optimizer.name,
+                "actor_optimizer": type(actor_optimizer).__name__.lower(),
                 **{
                     f"actor_optimizer/{k}": v
                     for k, v in dataclasses.asdict(actor_optimizer.cfg).items()
                 },
-                "critic_optimizer": critic_optimizer.name,
+                "critic_optimizer": type(critic_optimizer).__name__.lower(),
                 **{
                     f"critic_optimizer/{k}": v
                     for k, v in dataclasses.asdict(critic_optimizer.cfg).items()

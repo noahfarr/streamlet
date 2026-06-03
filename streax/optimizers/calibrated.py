@@ -16,6 +16,8 @@ class CalibratedConfig:
     beta: float = 0.999
     eps: float = 1e-8
     nu: float = 1.0
+    adaptive_nu: bool = struct.field(pytree_node=False, default=False)
+    rho_target: float = 1.0
     alpha_max: float = 1.0
     huber: bool = False
     huber_delta: float = 1.0
@@ -107,7 +109,10 @@ class Calibrated:
 
         y_t = jnp.square(td_error) * squared_z_norm
 
-        nu = self.cfg.nu
+        if self.cfg.adaptive_nu:
+            nu = self.cfg.rho_target * state.s_hat / (state.y_hat + self.cfg.eps)
+        else:
+            nu = self.cfg.nu
 
         alpha = jnp.maximum(0.0, state.m_hat) / (
             state.s_hat + nu * state.y_hat + self.cfg.eps
