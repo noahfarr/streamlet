@@ -57,15 +57,15 @@ class DashboardLogger:
     def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
         """Render a snapshot of a per-timestep sequence.
 
-        Leaves are ``(num_seeds, T, *rest)``; the trailing ``*rest`` axes are
-        reduced with ``nanmean`` and the most recent finite value along ``T`` is
-        kept per seed, giving a ``(num_seeds,)`` snapshot per key (the table then
-        shows ``mean ± std`` across seeds). ``NaN``-only keys are dropped.
+        Leaves are ``(num_seeds, T, *rest)``; every axis after the seed axis
+        (the epoch ``T`` plus any trailing ``*rest``) is reduced with
+        ``nanmean``, giving a ``(num_seeds,)`` epoch mean per key (the table
+        then shows ``mean ± std`` across seeds). ``NaN``-only keys are dropped.
         """
         steps = jnp.asarray(steps).reshape(-1)
         step = int(steps[-1])
         snapshot = {
-            "/".join(str(p.key) for p in path): self._last_finite(leaf)
+            "/".join(str(p.key) for p in path): self._epoch_mean(leaf)
             for path, leaf in jax.tree_util.tree_leaves_with_path(data)
         }
         snapshot = {k: v for k, v in snapshot.items() if v is not None}
@@ -76,17 +76,19 @@ class DashboardLogger:
         self.live.update(dashboard, refresh=True)
 
     @staticmethod
-    def _last_finite(leaf: PyTree):
-        """Reduce a ``(num_seeds, T, *rest)`` leaf to the most recent finite
-        per-seed value, or ``None`` if no finite value exists."""
+    def _epoch_mean(leaf: PyTree):
+        """Reduce a ``(num_seeds, T, *rest)`` leaf to a per-seed mean over the
+        epoch, ignoring ``NaN`` (so sparse metrics like episode returns average
+        only the steps that produced a value). Returns ``None`` if the leaf is
+        entirely ``NaN``."""
         leaf = jnp.asarray(leaf)
-        reduced = jnp.nanmean(leaf, axis=tuple(range(2, leaf.ndim)))  # (S, T)
-        finite = jnp.isfinite(reduced)
+        finite = jnp.isfinite(leaf)
         if not bool(jnp.any(finite)):
             return None
-        # index of the last finite step per seed (0 if a seed has none)
-        last = (reduced.shape[1] - 1) - jnp.argmax(finite[:, ::-1], axis=1)
-        return jnp.take_along_axis(reduced, last[:, None], axis=1)[:, 0]
+        axes = tuple(range(1, leaf.ndim))
+        total = jnp.nansum(leaf, axis=axes)
+        count = jnp.sum(finite, axis=axes)
+        return total / jnp.maximum(count, 1)
 
     def finish(self) -> None:
         self.live.stop()
