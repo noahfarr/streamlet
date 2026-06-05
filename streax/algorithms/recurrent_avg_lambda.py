@@ -6,7 +6,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -33,7 +32,7 @@ class RecurrentAVGLambdaConfig:
     gamma: float
     alpha: float
     trace_lambda: float = 0.0
-    unroll: int = struct.field(pytree_node=False, default=2)
+    unroll: int = struct.field(pytree_node=False, default=4)
 
 
 @struct.dataclass(frozen=True)
@@ -246,7 +245,7 @@ class RecurrentAVGLambda:
         trace_decay = self.cfg.gamma * self.cfg.trace_lambda
         keep = trace_decay * (1.0 - state.timestep.done.astype(jnp.float32))
         critic_trace = jax.tree.map(
-            lambda t, g: broadcast(keep, t) * t + g, state.critic_trace, q_grads
+            lambda t, g: (broadcast(keep, t) * t + g).astype(t.dtype), state.critic_trace, q_grads
         )
 
         critic_updates, critic_optimizer_state = self.critic_optimizer.update(
@@ -265,9 +264,9 @@ class RecurrentAVGLambda:
                 "critic/q": q.mean(),
                 "critic/target_v": target_v.mean(),
                 "critic/td_error": td_error.mean(),
+                "critic/absolute_td_error": jnp.abs(td_error).mean(),
                 "critic/sigma": sigma.mean(),
                 "critic/explained_variance": explained_variance,
-                "critic_trace/trace_norm": optax.global_norm(critic_trace),
             }
         )
 

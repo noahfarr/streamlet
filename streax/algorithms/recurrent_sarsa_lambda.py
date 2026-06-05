@@ -5,7 +5,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import Implicit, ObGD, Optimizer
@@ -25,7 +24,7 @@ class RecurrentSARSALambdaConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
-    unroll: int = struct.field(pytree_node=False, default=2)
+    unroll: int = struct.field(pytree_node=False, default=4)
 
 
 @struct.dataclass(frozen=True)
@@ -183,7 +182,7 @@ class RecurrentSARSALambda:
         )
 
         q_trace = jax.tree.map(
-            lambda t, g: broadcast(discount, t) * t + g, state.q_trace, q_grads
+            lambda t, g: (broadcast(discount, t) * t + g).astype(t.dtype), state.q_trace, q_grads
         )
 
         if isinstance(self.q_optimizer, Implicit) or (
@@ -229,8 +228,8 @@ class RecurrentSARSALambda:
         log_dict = {
             "q_network/q_value": q_values.mean(),
             "q_network/td_error": td_error.mean(),
+            "q_network/absolute_td_error": jnp.abs(td_error).mean(),
             "training/epsilon": self.epsilon_schedule(state.step),
-            "q_trace/trace_norm": optax.global_norm(new_q_trace),
         }
         lox.log(log_dict)
 

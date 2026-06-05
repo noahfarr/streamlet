@@ -6,7 +6,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import AlphaBound, Calibrated, Implicit, ObGD, Optimizer
@@ -26,7 +25,7 @@ class RecurrentQLambdaConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
-    unroll: int = struct.field(pytree_node=False, default=2)
+    unroll: int = struct.field(pytree_node=False, default=4)
 
 
 @struct.dataclass(frozen=True)
@@ -148,8 +147,7 @@ class RecurrentQLambda:
     def _update_step(
         self, state: RecurrentQLambdaState, key: Key, *, policy: Callable
     ) -> tuple[RecurrentQLambdaState, None]:
-        step_key, _ = jax.random.split(key)
-        state, transition = self._step(state, step_key, policy=policy)
+        state, transition = self._step(state, key, policy=policy)
         state = self._update(state, transition)
         return state.replace(update_step=state.update_step + 1), None
 
@@ -189,7 +187,7 @@ class RecurrentQLambda:
         )
 
         q_trace = jax.tree.map(
-            lambda t, g: broadcast(discount, t) * t + g, state.q_trace, q_grads
+            lambda t, g: (broadcast(discount, t) * t + g).astype(t.dtype), state.q_trace, q_grads
         )
 
         if isinstance(self.q_optimizer, (Implicit, Calibrated, AlphaBound)) or (
@@ -247,8 +245,8 @@ class RecurrentQLambda:
         log_dict = {
             "q_network/q_value": q_values.mean(),
             "q_network/td_error": td_error.mean(),
+            "q_network/absolute_td_error": jnp.abs(td_error).mean(),
             "training/epsilon": self.epsilon_schedule(state.step),
-            "q_trace/trace_norm": optax.global_norm(new_q_trace),
         }
         lox.log(log_dict)
 

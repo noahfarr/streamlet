@@ -6,7 +6,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import Implicit, Optimizer
@@ -28,7 +27,7 @@ class QRCLambdaConfig:
     trace_lambda: float
     gradient_correction: bool
     regularization_coefficient: float
-    unroll: int = struct.field(pytree_node=False)
+    unroll: int = struct.field(pytree_node=False, default=4)
 
 
 @struct.dataclass(frozen=True)
@@ -57,20 +56,36 @@ class QRCLambda:
     h_optimizer: Optimizer
     epsilon_schedule: Callable
 
+    def _value_and_grad(
+        self, q_values: Array, q_vjp: Callable, action: Array
+    ) -> tuple[Array, PyTree]:
+        q_value = jnp.take_along_axis(q_values, action[:, None], axis=-1).squeeze(-1)
+        num_envs = self.cfg.num_envs
+        num_actions = q_values.shape[-1]
+        onehot = jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
+        cotangent = jnp.eye(num_envs, dtype=q_values.dtype)[:, :, None] * onehot[None]
+        (q_grads,) = jax.vmap(q_vjp)(cotangent)
+        return q_value, q_grads
+
     def _greedy_action(
         self, key: Key, state: QRCLambdaState
-    ) -> tuple[QRCLambdaState, Array, Array]:
-        q_values = self.q_network.apply(state.q_params, state.timestep.obs)
-        action = jnp.argmax(q_values, axis=-1)
-        return (
-            state,
-            action,
-            jnp.zeros(self.cfg.num_envs, dtype=jnp.bool_),
+    ) -> tuple[QRCLambdaState, Array, dict]:
+        q_values, q_vjp = jax.vjp(
+            lambda params: self.q_network.apply(params, state.timestep.obs),
+            state.q_params,
         )
+        action = jnp.argmax(q_values, axis=-1)
+        q_value, q_grads = self._value_and_grad(q_values, q_vjp, action)
+        aux = {
+            "non_greedy": jnp.zeros(self.cfg.num_envs, dtype=jnp.bool_),
+            "q_value": q_value,
+            "q_grads": q_grads,
+        }
+        return state, action, aux
 
     def _random_action(
         self, key: Key, state: QRCLambdaState
-    ) -> tuple[QRCLambdaState, Array, Array]:
+    ) -> tuple[QRCLambdaState, Array, dict]:
         action_space = self.env.action_space(self.env_params)
         action = jax.random.randint(
             key,
@@ -78,14 +93,20 @@ class QRCLambda:
             minval=0,
             maxval=action_space.n,
         )
-        return state, action, jnp.ones(self.cfg.num_envs, dtype=jnp.bool_)
+        aux = {"non_greedy": jnp.ones(self.cfg.num_envs, dtype=jnp.bool_)}
+        return state, action, aux
 
     def _epsilon_greedy_action(
         self, key: Key, state: QRCLambdaState
-    ) -> tuple[QRCLambdaState, Array, Array]:
-        random_key, greedy_key, sample_key = jax.random.split(key, 3)
+    ) -> tuple[QRCLambdaState, Array, dict]:
+        random_key, _, sample_key = jax.random.split(key, 3)
         state, random_action, _ = self._random_action(random_key, state)
-        state, greedy_action, _ = self._greedy_action(greedy_key, state)
+
+        q_values, q_vjp = jax.vjp(
+            lambda params: self.q_network.apply(params, state.timestep.obs),
+            state.q_params,
+        )
+        greedy_action = jnp.argmax(q_values, axis=-1)
 
         epsilon = self.epsilon_schedule(state.step)
         is_random = jax.random.uniform(sample_key, (self.cfg.num_envs,)) < epsilon
@@ -93,13 +114,15 @@ class QRCLambda:
             broadcast(is_random, greedy_action), random_action, greedy_action
         )
         non_greedy = is_random & (random_action != greedy_action)
-        return state, action, non_greedy
+        q_value, q_grads = self._value_and_grad(q_values, q_vjp, action)
+        aux = {"non_greedy": non_greedy, "q_value": q_value, "q_grads": q_grads}
+        return state, action, aux
 
     def _step(
         self, state: QRCLambdaState, key: Key, *, policy: Callable
     ) -> tuple[QRCLambdaState, Transition]:
         action_key, step_key = jax.random.split(key)
-        state, action, non_greedy = policy(action_key, state)
+        state, action, aux = policy(action_key, state)
 
         step_keys = jax.random.split(step_key, self.cfg.num_envs)
         next_obs, env_state, reward, done, info = jax.vmap(
@@ -111,7 +134,7 @@ class QRCLambda:
         transition = Transition(
             first=state.timestep,
             second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
-            aux={"non_greedy": non_greedy},
+            aux=aux,
         )
 
         return (
@@ -131,38 +154,35 @@ class QRCLambda:
     def _update_step(
         self, state: QRCLambdaState, key: Key, *, policy: Callable
     ) -> tuple[QRCLambdaState, None]:
-        step_key, _ = jax.random.split(key)
-        state, transition = self._step(state, step_key, policy=policy)
+        state, transition = self._step(state, key, policy=policy)
         state = self._update(state, transition)
         return state.replace(update_step=state.update_step + 1), None
 
     def _update(self, state: QRCLambdaState, transition: Transition) -> QRCLambdaState:
         action = transition.second.action
-        non_greedy = transition.aux["non_greedy"]
+        aux = transition.aux
+        non_greedy = aux["non_greedy"]
+        q_values = aux["q_value"]
+        q_grads = aux["q_grads"]
 
-        def compute_td_error(params):
-            q_values = self.q_network.apply(params, transition.first.obs)
-            q_value = jnp.take_along_axis(
-                q_values, action[:, None], axis=-1
-            ).squeeze(-1)
-            next_q_values = self.q_network.apply(params, transition.second.obs)
-            next_value = next_q_values.max(axis=-1)
-            td_error = (
-                transition.second.reward
-                + self.cfg.gamma * next_value * (1.0 - transition.second.done)
-                - q_value
-            )
-            return q_value, td_error
+        def next_value_fn(params):
+            return self.q_network.apply(params, transition.second.obs).max(axis=-1)
 
-        (q_values, td_errors), q_vjp = jax.vjp(
-            compute_td_error, state.q_params, has_aux=False
-        )
-
+        next_value, nv_vjp = jax.vjp(next_value_fn, state.q_params)
         batch = self.cfg.num_envs
-        eye = jnp.eye(batch, dtype=q_values.dtype)
-        zeros = jnp.zeros((batch, batch), dtype=q_values.dtype)
-        (q_grads,) = jax.vmap(q_vjp)((eye, zeros))
-        (td_grads,) = jax.vmap(q_vjp)((zeros, eye))
+        (next_value_grads,) = jax.vmap(nv_vjp)(jnp.eye(batch, dtype=next_value.dtype))
+
+        td_errors = (
+            transition.second.reward
+            + self.cfg.gamma * next_value * (1.0 - transition.second.done)
+            - q_values
+        )
+        coef = self.cfg.gamma * (1.0 - transition.second.done.astype(jnp.float32))
+        td_grads = jax.tree.map(
+            lambda nvg, qg: broadcast(coef, nvg) * nvg - qg,
+            next_value_grads,
+            q_grads,
+        )
 
         def compute_h(params):
             h_values = self.h_network.apply(params, transition.first.obs)
@@ -178,10 +198,10 @@ class QRCLambda:
         discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
 
         q_trace = jax.tree.map(
-            lambda t, g: discount * t + g, state.q_trace, q_grads
+            lambda t, g: (discount * t + g).astype(t.dtype), state.q_trace, q_grads
         )
         h_trace = jax.tree.map(
-            lambda t, g: discount * t + g, state.h_trace, h_grads
+            lambda t, g: (discount * t + g).astype(t.dtype), state.h_trace, h_grads
         )
         bias_trace = discount * state.bias_trace + h_values
 
@@ -271,16 +291,11 @@ class QRCLambda:
             {
                 "q_network/q_value": q_values.mean(),
                 "q_network/td_error": td_errors.mean(),
+                "q_network/absolute_td_error": jnp.abs(td_errors).mean(),
                 "q_network/explained_variance": explained_variance,
-                "q_network/gradient_norm": optax.global_norm(q_grads_final),
-                "q_network/update_norm": optax.global_norm(q_param_updates),
                 "h_network/h_value": h_values.mean(),
-                "h_network/gradient_norm": optax.global_norm(h_grads_final),
-                "h_network/update_norm": optax.global_norm(h_param_updates),
                 "h_network/bias_trace": bias_trace.mean(),
                 "training/epsilon": self.epsilon_schedule(state.step),
-                "q_trace/trace_norm": optax.global_norm(new_q_trace),
-                "h_trace/trace_norm": optax.global_norm(new_h_trace),
             }
         )
 

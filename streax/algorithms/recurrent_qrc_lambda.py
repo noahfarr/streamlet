@@ -6,7 +6,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -28,7 +27,7 @@ class RecurrentQRCLambdaConfig:
     trace_lambda: float
     gradient_correction: bool
     regularization_coefficient: float
-    unroll: int = struct.field(pytree_node=False)
+    unroll: int = struct.field(pytree_node=False, default=4)
 
 
 @struct.dataclass(frozen=True)
@@ -176,8 +175,7 @@ class RecurrentQRCLambda:
     def _update_step(
         self, state: RecurrentQRCLambdaState, key: Key, *, policy: Callable
     ) -> tuple[RecurrentQRCLambdaState, None]:
-        step_key, _ = jax.random.split(key)
-        state, transition = self._step(state, step_key, policy=policy)
+        state, transition = self._step(state, key, policy=policy)
         state = self._update(state, transition)
         return state.replace(update_step=state.update_step + 1), None
 
@@ -226,10 +224,10 @@ class RecurrentQRCLambda:
         discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
 
         q_trace = jax.tree.map(
-            lambda t, g: discount * t + g, state.q_trace, q_grads
+            lambda t, g: (discount * t + g).astype(t.dtype), state.q_trace, q_grads
         )
         h_trace = jax.tree.map(
-            lambda t, g: discount * t + g, state.h_trace, h_grads
+            lambda t, g: (discount * t + g).astype(t.dtype), state.h_trace, h_grads
         )
         bias_trace = discount * state.bias_trace + h_values
 
@@ -284,16 +282,11 @@ class RecurrentQRCLambda:
             {
                 "q_network/q_value": q_values.mean(),
                 "q_network/td_error": td_errors.mean(),
+                "q_network/absolute_td_error": jnp.abs(td_errors).mean(),
                 "q_network/explained_variance": explained_variance,
-                "q_network/gradient_norm": optax.global_norm(q_grads_final),
-                "q_network/update_norm": optax.global_norm(q_param_updates),
                 "h_network/h_value": h_values.mean(),
-                "h_network/gradient_norm": optax.global_norm(h_grads_final),
-                "h_network/update_norm": optax.global_norm(h_param_updates),
                 "h_network/bias_trace": bias_trace.mean(),
                 "training/epsilon": self.epsilon_schedule(state.step),
-                "q_trace/trace_norm": optax.global_norm(new_q_trace),
-                "h_trace/trace_norm": optax.global_norm(new_h_trace),
             }
         )
 

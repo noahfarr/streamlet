@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -38,6 +39,7 @@ class ImplicitConfig:
     use_adaptive_clip: bool = struct.field(pytree_node=False, default=True)
     use_rmsprop: bool = struct.field(pytree_node=False, default=True)
     use_sigma: bool = struct.field(pytree_node=False, default=True)
+    dtype: Any = struct.field(pytree_node=False, default=jnp.float32)
 
 
 @struct.dataclass(frozen=True)
@@ -58,7 +60,7 @@ class Implicit:
 
     def init(self, parameters: PyTree, num_envs: int) -> ImplicitState:
         second_moment = jax.tree.map(
-            lambda p: jnp.ones((num_envs, *p.shape), dtype=jnp.float32),
+            lambda p: jnp.ones((num_envs, *p.shape), dtype=self.cfg.dtype),
             parameters,
         )
         zeros = jnp.zeros((num_envs,), dtype=jnp.float32)
@@ -105,7 +107,9 @@ class Implicit:
             preconditioner = jax.tree.map(jnp.ones_like, state.second_moment)
 
         new_second_moment = jax.tree.map(
-            lambda v, g: cfg.beta2 * v + (1.0 - cfg.beta2) * jnp.square(g),
+            lambda v, g: (cfg.beta2 * v + (1.0 - cfg.beta2) * jnp.square(g)).astype(
+                cfg.dtype
+            ),
             state.second_moment,
             gradient,
         )
@@ -153,10 +157,9 @@ class Implicit:
 
         if cfg.normalize_delta:
             next_norm_step = state.norm_step + 1
-            new_absolute_delta_ema = (
-                cfg.beta_norm * state.absolute_delta_ema
-                + (1.0 - cfg.beta_norm) * jnp.abs(clipped_delta)
-            )
+            new_absolute_delta_ema = cfg.beta_norm * state.absolute_delta_ema + (
+                1.0 - cfg.beta_norm
+            ) * jnp.abs(clipped_delta)
             absolute_delta_unbiased = new_absolute_delta_ema / (
                 1.0 - cfg.beta_norm**next_norm_step
             )
@@ -196,7 +199,9 @@ class Implicit:
                         - broadcast(scale_b, b) * b
                     )
                     / m
-                ).mean(axis=0),
+                )
+                .mean(axis=0)
+                .astype(cfg.dtype),
                 trace,
                 gradient,
                 td_error_grad,
@@ -205,7 +210,9 @@ class Implicit:
         else:
             scale = safe_delta * step_size
             updates = jax.tree.map(
-                lambda t, m: (broadcast(scale, t) * t / m).mean(axis=0),
+                lambda t, m: (broadcast(scale, t) * t / m)
+                .mean(axis=0)
+                .astype(cfg.dtype),
                 trace,
                 preconditioner,
             )
@@ -226,7 +233,6 @@ class Implicit:
             f"{self.name}/baseline": baseline.mean(),
             f"{self.name}/sigma": new_sigma.mean(),
             f"{self.name}/safe_delta": safe_delta.mean(),
-            f"{self.name}/update_norm": optax.global_norm(updates),
         }
         if qrc:
             log_dict[f"{self.name}/proximal_delta"] = proximal_delta.mean()

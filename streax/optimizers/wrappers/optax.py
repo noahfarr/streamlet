@@ -16,13 +16,6 @@ class OptaxOptimizerState:
 
 @dataclass
 class OptaxOptimizer:
-    """Adapts any optax ``GradientTransformation`` to the streaming interface.
-
-    The TD-scaled eligibility trace ``td_error * trace`` is the ascent
-    direction; since the algorithm applies updates as ``params + updates``, we
-    hand optax its negation (averaged over the environment axis) as the
-    gradient to descend.
-    """
 
     tx: optax.GradientTransformation
     name: str = "optimizer"
@@ -44,5 +37,4 @@ class OptaxOptimizer:
                 lambda leaf: -(broadcast(td_error, leaf) * leaf).mean(axis=0), trace
             )
         updates, opt_state = self.tx.update(grad, state.opt_state)
-        lox.log({f"{self.name}/update_norm": optax.global_norm(updates)})
         return updates, OptaxOptimizerState(opt_state=opt_state)

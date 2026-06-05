@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -17,6 +18,7 @@ class AdaptiveConfig:
     eta: float = 4.6e-4
     eps: float = 0.1
     clip: float = 1.0
+    dtype: Any = struct.field(pytree_node=False, default=jnp.float32)
 
 
 @struct.dataclass(frozen=True)
@@ -38,7 +40,7 @@ class Adaptive:
 
     def init(self, parameters: PyTree, num_envs: int) -> AdaptiveState:
         second_moment = jax.tree.map(
-            lambda p: jnp.zeros((num_envs, *p.shape), dtype=jnp.float32),
+            lambda p: jnp.zeros((num_envs, *p.shape), dtype=self.cfg.dtype),
             parameters,
         )
         return AdaptiveState(second_moment=second_moment)
@@ -54,7 +56,9 @@ class Adaptive:
         gamma_lambda = cfg.gamma * cfg.trace_lambda
 
         new_v = jax.tree.map(
-            lambda v, g: gamma_lambda * v + (1.0 - gamma_lambda) * jnp.square(g),
+            lambda v, g: (
+                gamma_lambda * v + (1.0 - gamma_lambda) * jnp.square(g)
+            ).astype(cfg.dtype),
             state.second_moment,
             gradient,
         )
@@ -63,13 +67,15 @@ class Adaptive:
 
         def compute_update(z, v):
             rho = z / (jnp.sqrt(v) + cfg.eps)
-            return (cfg.eta * broadcast(clipped_delta, rho) * rho).mean(axis=0)
+            return (
+                (cfg.eta * broadcast(clipped_delta, rho) * rho)
+                .mean(axis=0)
+                .astype(cfg.dtype)
+            )
 
         updates = jax.tree.map(compute_update, trace, new_v)
 
-        effective_lr = jax.tree.map(
-            lambda v: cfg.eta / (jnp.sqrt(v) + cfg.eps), new_v
-        )
+        effective_lr = jax.tree.map(lambda v: cfg.eta / (jnp.sqrt(v) + cfg.eps), new_v)
         lr_leaves = jax.tree.leaves(effective_lr)
         step_size = sum(jnp.sum(x) for x in lr_leaves) / sum(x.size for x in lr_leaves)
         v_leaves = jax.tree.leaves(new_v)
@@ -81,7 +87,6 @@ class Adaptive:
             {
                 f"{self.name}/step_size": step_size,
                 f"{self.name}/precond_rms": precond_rms,
-                f"{self.name}/update_norm": optax.global_norm(updates),
                 f"{self.name}/clipped_delta": clipped_delta.mean(),
             }
         )

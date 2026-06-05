@@ -1,5 +1,6 @@
 import enum
 from dataclasses import dataclass
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -27,6 +28,7 @@ class CalibratedConfig:
     adaptive_clip: bool = struct.field(pytree_node=False, default=False)
     clip_multiplier: float = 20.0
     beta_clip: float = 0.999
+    dtype: Any = struct.field(pytree_node=False, default=jnp.float32)
 
 
 @struct.dataclass(frozen=True)
@@ -49,7 +51,7 @@ class Calibrated:
         v = None
         if self.cfg.precondition:
             v = jax.tree.map(
-                lambda p: jnp.zeros((num_envs, *p.shape), dtype=jnp.float32),
+                lambda p: jnp.zeros((num_envs, *p.shape), dtype=self.cfg.dtype),
                 parameters,
             )
         d_hat = None
@@ -73,7 +75,9 @@ class Calibrated:
 
         def rescale(v, t):
             v_hat = v / bias
-            return jnp.where(has_grads, t / (jnp.sqrt(v_hat) + self.cfg.precondition_eps), t)
+            return jnp.where(
+                has_grads, t / (jnp.sqrt(v_hat) + self.cfg.precondition_eps), t
+            )
 
         return jax.tree.map(rescale, state.v, trace)
 
@@ -121,10 +125,14 @@ class Calibrated:
 
         def compute_update(direction_leaf):
             return (
-                broadcast(alpha, direction_leaf)
-                * broadcast(td_error, direction_leaf)
-                * direction_leaf
-            ).mean(axis=0)
+                (
+                    broadcast(alpha, direction_leaf)
+                    * broadcast(td_error, direction_leaf)
+                    * direction_leaf
+                )
+                .mean(axis=0)
+                .astype(self.cfg.dtype)
+            )
 
         updates = jax.tree.map(compute_update, direction)
 
@@ -137,7 +145,9 @@ class Calibrated:
         v = state.v
         if self.cfg.precondition:
             v = jax.tree.map(
-                lambda v, g: self.cfg.beta2 * v + (1.0 - self.cfg.beta2) * jnp.square(g),
+                lambda v, g: (
+                    self.cfg.beta2 * v + (1.0 - self.cfg.beta2) * jnp.square(g)
+                ).astype(self.cfg.dtype),
                 state.v,
                 gradient,
             )
@@ -155,7 +165,6 @@ class Calibrated:
                 f"{self.name}/cv2": (
                     s_hat / (jnp.square(m_hat) + self.cfg.eps) - 1.0
                 ).mean(),
-                f"{self.name}/update_norm": optax.global_norm(updates),
                 f"{self.name}/absolute_td_error": jnp.abs(td_error).mean(),
             }
         )

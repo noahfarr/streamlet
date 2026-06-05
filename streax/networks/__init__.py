@@ -1,2 +1,8 @@
 from .initializers import sparse
-from .layers import Flatten, Identity, L2Normalize, RecurrentSequential
+from .layers import (
+    Flatten,
+    Identity,
+    L2Normalize,
+    LayerNorm,
+    RecurrentSequential,
+)

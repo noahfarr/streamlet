@@ -6,7 +6,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import Implicit, ObGD, Optimizer
@@ -26,7 +25,7 @@ class SARSALambdaConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
-    unroll: int = struct.field(pytree_node=False, default=2)
+    unroll: int = struct.field(pytree_node=False, default=4)
 
 
 @struct.dataclass(frozen=True)
@@ -52,7 +51,7 @@ class SARSALambda:
 
     def _sample_action(
         self, key: Key, q_params: PyTree, obs: Array, step: Array
-    ) -> Array:
+    ) -> tuple[Array, Array]:
         random_key, sample_key = jax.random.split(key)
         action_space = self.env.action_space(self.env_params)
         random_action = jax.random.randint(
@@ -69,7 +68,8 @@ class SARSALambda:
         action = jnp.where(
             broadcast(is_random, greedy_action), random_action, greedy_action
         )
-        return action
+        value = jnp.take_along_axis(q_values, action[:, None], axis=-1).squeeze(-1)
+        return action, value
 
     def _step(self, state: SARSALambdaState, key: Key) -> tuple[SARSALambdaState, Transition]:
         sample_key, step_key = jax.random.split(key)
@@ -83,14 +83,14 @@ class SARSALambda:
         reward = jnp.asarray(reward, dtype=jnp.float32)
         done = jnp.asarray(done, dtype=jnp.bool_)
 
-        next_action = self._sample_action(
+        next_action, next_value = self._sample_action(
             sample_key, state.q_params, next_obs, state.step + self.cfg.num_envs
         )
 
         transition = Transition(
             first=state.timestep,
             second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
-            aux={"next_action": next_action},
+            aux={"next_action": next_action, "next_value": next_value},
         )
 
         return (
@@ -120,15 +120,12 @@ class SARSALambda:
     ) -> SARSALambdaState:
         action = transition.second.action
         next_action = transition.aux["next_action"]
+        next_value = transition.aux["next_value"]
 
         def compute_td_error(params):
             q_values = self.q_network.apply(params, transition.first.obs)
             q_value = jnp.take_along_axis(
                 q_values, action[:, None], axis=-1
-            ).squeeze(-1)
-            next_q_values = self.q_network.apply(params, transition.second.obs)
-            next_value = jnp.take_along_axis(
-                next_q_values, next_action[:, None], axis=-1
             ).squeeze(-1)
             td_error = (
                 transition.second.reward
@@ -149,7 +146,7 @@ class SARSALambda:
         )
 
         q_trace = jax.tree.map(
-            lambda t, g: broadcast(discount, t) * t + g, state.q_trace, q_grads
+            lambda t, g: (broadcast(discount, t) * t + g).astype(t.dtype), state.q_trace, q_grads
         )
 
         if isinstance(self.q_optimizer, Implicit) or (
@@ -202,8 +199,8 @@ class SARSALambda:
         log_dict = {
             "q_network/q_value": q_values.mean(),
             "q_network/td_error": td_error.mean(),
+            "q_network/absolute_td_error": jnp.abs(td_error).mean(),
             "training/epsilon": self.epsilon_schedule(state.step),
-            "q_trace/trace_norm": optax.global_norm(new_q_trace),
         }
         lox.log(log_dict)
 
@@ -235,7 +232,7 @@ class SARSALambda:
             q_params,
         )
 
-        next_action = self._sample_action(action_key, q_params, obs, jnp.int32(0))
+        next_action, _ = self._sample_action(action_key, q_params, obs, jnp.int32(0))
 
         return SARSALambdaState(
             step=0,

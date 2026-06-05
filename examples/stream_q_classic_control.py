@@ -13,10 +13,9 @@ from streax.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
-    StickyActionWrapper,
 )
 from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from streax.networks import Flatten, sparse
+from streax.networks import sparse, LayerNorm
 from streax.optimizers import ObGD, ObGDConfig
 
 parser = argparse.ArgumentParser()
@@ -31,10 +30,10 @@ parser.add_argument(
 args = parser.parse_args()
 
 total_timesteps = 500_000
-num_epochs = 10
+num_epochs = 1
 num_steps = total_timesteps // num_epochs
 seed = 0
-num_seeds = 10
+num_seeds = 1
 env_id = args.env_id
 
 env, env_params = environment.make(env_id)
@@ -54,10 +53,10 @@ sparse_init = sparse(sparsity=0.9)
 q_network = nn.Sequential(
     [
         nn.Dense(128, kernel_init=sparse_init),
-        nn.LayerNorm(),
+        LayerNorm(),
         nn.leaky_relu,
         nn.Dense(128, kernel_init=sparse_init),
-        nn.LayerNorm(),
+        LayerNorm(),
         nn.leaky_relu,
         nn.Dense(num_actions, kernel_init=sparse_init),
     ]
@@ -148,7 +147,7 @@ for i in range(num_epochs):
     jax.block_until_ready(state)
     end = time.perf_counter()
 
-    SPS = int(num_steps / (end - start))
+    SPS = int(num_steps * num_seeds / (end - start))
 
     mask = logs.pop("returned_episode")
     episode_returns = jnp.where(mask, logs.pop("returned_episode_returns"), jnp.nan)

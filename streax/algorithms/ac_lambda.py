@@ -6,7 +6,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import Implicit, ObGD, Optimizer
@@ -27,7 +26,7 @@ class ACLambdaConfig:
     gamma: float
     trace_lambda: float
     entropy_coefficient: float = 0.01
-    unroll: int = struct.field(pytree_node=False, default=2)
+    unroll: int = struct.field(pytree_node=False, default=4)
 
 
 @struct.dataclass(frozen=True)
@@ -56,24 +55,42 @@ class ACLambda:
 
     def _stochastic_action(
         self, key: Key, state: ACLambdaState
-    ) -> tuple[ACLambdaState, Array, Array]:
-        dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
-        action, log_prob = dist.sample_and_log_prob(seed=key)
-        return state, action, log_prob
+    ) -> tuple[ACLambdaState, Array, dict]:
+        def actor_outputs(params):
+            dist = self.actor_network.apply(params, state.timestep.obs)
+            action, _ = dist.sample_and_log_prob(seed=key)
+            action = jax.lax.stop_gradient(action)
+            return (dist.log_prob(action), dist.entropy()), action
+
+        (log_prob, entropy), actor_vjp, action = jax.vjp(
+            actor_outputs, state.actor_params, has_aux=True
+        )
+        batch = self.cfg.num_envs
+        eye = jnp.eye(batch, dtype=log_prob.dtype)
+        zeros = jnp.zeros((batch, batch), dtype=log_prob.dtype)
+        (log_prob_grads,) = jax.vmap(actor_vjp)((eye, zeros))
+        (entropy_grads,) = jax.vmap(actor_vjp)((zeros, eye))
+        aux = {
+            "log_prob": log_prob,
+            "entropy": entropy,
+            "log_prob_grads": log_prob_grads,
+            "entropy_grads": entropy_grads,
+        }
+        return state, action, aux
 
     def _deterministic_action(
         self, key: Key, state: ACLambdaState
-    ) -> tuple[ACLambdaState, Array, Array]:
+    ) -> tuple[ACLambdaState, Array, dict]:
         dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
         action = dist.mode()
-        log_prob = dist.log_prob(action)
-        return state, action, log_prob
+        aux = {"log_prob": dist.log_prob(action), "entropy": dist.entropy()}
+        return state, action, aux
 
     def _step(
         self, state: ACLambdaState, key: Key, *, policy: Callable
     ) -> tuple[ACLambdaState, Transition]:
         action_key, step_key = jax.random.split(key)
-        state, action, log_prob = policy(action_key, state)
+        state, action, aux = policy(action_key, state)
 
         step_keys = jax.random.split(step_key, self.cfg.num_envs)
         next_obs, env_state, reward, done, info = jax.vmap(
@@ -85,6 +102,7 @@ class ACLambda:
         transition = Transition(
             first=state.timestep,
             second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
+            aux=aux,
         )
 
         return (
@@ -104,8 +122,7 @@ class ACLambda:
     def _update_step(
         self, state: ACLambdaState, key: Key, *, policy: Callable
     ) -> tuple[ACLambdaState, None]:
-        step_key, _ = jax.random.split(key)
-        state, transition = self._step(state, step_key, policy=policy)
+        state, transition = self._step(state, key, policy=policy)
         state = self._update(state, transition)
         return state.replace(update_step=state.update_step + 1), None
 
@@ -114,11 +131,11 @@ class ACLambda:
         state: ACLambdaState,
         transition: Transition,
     ) -> ACLambdaState:
-        action = transition.second.action
-
-        def compute_log_probs(params):
-            dist = self.actor_network.apply(params, transition.first.obs)
-            return dist.log_prob(action), dist.entropy()
+        aux = transition.aux
+        log_probs = aux["log_prob"]
+        entropy_values = aux["entropy"]
+        log_prob_grads = aux["log_prob_grads"]
+        entropy_grads = aux["entropy_grads"]
 
         def compute_td_error(params):
             v = self.critic_network.apply(params, transition.first.obs)
@@ -138,14 +155,6 @@ class ACLambda:
         batch = self.cfg.num_envs
         (critic_grads,) = jax.vmap(critic_vjp)(jnp.eye(batch, dtype=critic_values.dtype))
 
-        (log_probs, entropy_values), actor_vjp = jax.vjp(
-            compute_log_probs, state.actor_params
-        )
-        eye = jnp.eye(batch, dtype=log_probs.dtype)
-        zeros = jnp.zeros((batch, batch), dtype=log_probs.dtype)
-        (log_prob_grads,) = jax.vmap(actor_vjp)((eye, zeros))
-        (entropy_grads,) = jax.vmap(actor_vjp)((zeros, eye))
-
         reset_trace = transition.second.done
         discount = jnp.broadcast_to(
             jnp.float32(self.cfg.gamma * self.cfg.trace_lambda), reset_trace.shape
@@ -159,7 +168,7 @@ class ACLambda:
 
         def accumulate(trace, gradient):
             return jax.tree.map(
-                lambda t, g: broadcast(discount, t) * t + g, trace, gradient
+                lambda t, g: (broadcast(discount, t) * t + g).astype(t.dtype), trace, gradient
             )
 
         def reset_eligibility(trace):
@@ -231,11 +240,10 @@ class ACLambda:
         log_dict = {
             "critic/value": critic_values.mean(),
             "critic/td_error": td_error.mean(),
+            "critic/absolute_td_error": jnp.abs(td_error).mean(),
             "critic/explained_variance": explained_variance,
             "actor/log_prob": log_probs.mean(),
             "actor/entropy": entropy_values.mean(),
-            "actor_trace/trace_norm": optax.global_norm(new_actor_trace),
-            "critic_trace/trace_norm": optax.global_norm(new_critic_trace),
         }
         lox.log(log_dict)
 

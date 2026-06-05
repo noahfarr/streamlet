@@ -5,7 +5,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import AlphaBound, Calibrated, Implicit, ObGD, Optimizer
@@ -25,7 +24,7 @@ class RecurrentTDLambdaConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
-    unroll: int = struct.field(pytree_node=False, default=2)
+    unroll: int = struct.field(pytree_node=False, default=4)
 
 
 @struct.dataclass(frozen=True)
@@ -107,8 +106,7 @@ class RecurrentTDLambda:
     def _update_step(
         self, state: RecurrentTDLambdaState, key: Key
     ) -> tuple[RecurrentTDLambdaState, None]:
-        step_key, _ = jax.random.split(key)
-        state, transition = self._step(state, step_key)
+        state, transition = self._step(state, key)
         state = self._update(state, transition)
         return state.replace(update_step=state.update_step + 1), None
 
@@ -142,7 +140,7 @@ class RecurrentTDLambda:
         )
 
         value_trace = jax.tree.map(
-            lambda t, g: broadcast(discount, t) * t + g, state.value_trace, value_grads
+            lambda t, g: (broadcast(discount, t) * t + g).astype(t.dtype), state.value_trace, value_grads
         )
 
         if isinstance(self.value_optimizer, (Implicit, Calibrated, AlphaBound)) or (
@@ -210,8 +208,8 @@ class RecurrentTDLambda:
         log_dict = {
             "value/value": next_value.mean(),
             "value/td_error": td_error.mean(),
+            "value/absolute_td_error": jnp.abs(td_error).mean(),
             "value/cumulant": transition.second.reward.mean(),
-            "value_trace/trace_norm": optax.global_norm(new_value_trace),
         }
         lox.log(log_dict)
 

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -17,6 +18,7 @@ class ObGDConfig:
     eps: float = 1e-8
     adaptive: bool = struct.field(pytree_node=False, default=False)
     exact: bool = struct.field(pytree_node=False, default=False)
+    dtype: Any = struct.field(pytree_node=False, default=jnp.float32)
 
 
 @struct.dataclass(frozen=True)
@@ -33,7 +35,7 @@ class ObGD:
 
     def init(self, parameters: PyTree, num_envs: int) -> ObGDState:
         second_moment = jax.tree.map(
-            lambda p: jnp.zeros((num_envs, *p.shape), dtype=jnp.float32),
+            lambda p: jnp.zeros((num_envs, *p.shape), dtype=self.cfg.dtype),
             parameters,
         )
         return ObGDState(second_moment=second_moment, t_step=jnp.int32(0))
@@ -69,8 +71,10 @@ class ObGD:
 
         if cfg.adaptive:
             new_v = jax.tree.map(
-                lambda v, t: cfg.beta2 * v
-                + (1.0 - cfg.beta2) * jnp.square(broadcast(td_error, t) * t),
+                lambda v, t: (
+                    cfg.beta2 * v
+                    + (1.0 - cfg.beta2) * jnp.square(broadcast(td_error, t) * t)
+                ).astype(cfg.dtype),
                 state.second_moment,
                 trace,
             )
@@ -123,13 +127,14 @@ class ObGD:
 
             updates = jax.tree.map(compute_update, trace)
 
+        updates = jax.tree.map(lambda u: u.astype(cfg.dtype), updates)
+
         lox.log(
             {
                 f"{self.name}/step_size": step_size.mean(),
                 f"{self.name}/z_sum": z_sum.mean(),
                 f"{self.name}/delta_bar": delta_bar.mean(),
                 f"{self.name}/overshoot": overshoot.mean(),
-                f"{self.name}/update_norm": optax.global_norm(updates),
             }
         )
 

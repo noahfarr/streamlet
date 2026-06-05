@@ -6,7 +6,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import AlphaBound, Implicit, Calibrated, ObGD, Optimizer
@@ -26,7 +25,7 @@ class TDLambdaConfig:
     num_envs: int
     gamma: float
     trace_lambda: float
-    unroll: int = struct.field(pytree_node=False, default=2)
+    unroll: int = struct.field(pytree_node=False, default=4)
 
 
 @struct.dataclass(frozen=True)
@@ -83,17 +82,18 @@ class TDLambda:
     def _update_step(
         self, state: TDLambdaState, key: Key
     ) -> tuple[TDLambdaState, None]:
-        step_key, _ = jax.random.split(key)
-        state, transition = self._step(state, step_key)
+        state, transition = self._step(state, key)
         state = self._update(state, transition)
         return state.replace(update_step=state.update_step + 1), None
 
     def _update(self, state: TDLambdaState, transition: Transition) -> TDLambdaState:
+        next_value = self.value_network.apply(
+            state.value_params, transition.second.obs
+        ).squeeze(-1)
+
         def compute_td_error(params):
             v = self.value_network.apply(params, transition.first.obs)
             value = v.squeeze(-1)
-            next_v = self.value_network.apply(params, transition.second.obs)
-            next_value = next_v.squeeze(-1)
             td_error = (
                 transition.second.reward
                 + self.cfg.gamma * (1.0 - transition.second.done) * next_value
@@ -113,7 +113,7 @@ class TDLambda:
         )
 
         value_trace = jax.tree.map(
-            lambda t, g: broadcast(discount, t) * t + g, state.value_trace, value_grads
+            lambda t, g: (broadcast(discount, t) * t + g).astype(t.dtype), state.value_trace, value_grads
         )
 
         if isinstance(self.value_optimizer, (Implicit, Calibrated, AlphaBound)) or (
@@ -174,16 +174,11 @@ class TDLambda:
             value_trace,
         )
 
-        next_value = self.value_network.apply(
-            value_params, transition.second.obs
-        ).squeeze(-1)
-
         log_dict = {
             "value/value": next_value.mean(),
             "value/td_error": td_error.mean(),
+            "value/absolute_td_error": jnp.abs(td_error).mean(),
             "value/cumulant": transition.second.reward.mean(),
-            "value/weight_norm_sq": optax.global_norm(value_params) ** 2,
-            "value_trace/trace_norm": optax.global_norm(new_value_trace),
         }
         lox.log(log_dict)
 

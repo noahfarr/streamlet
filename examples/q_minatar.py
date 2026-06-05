@@ -176,7 +176,7 @@ def run(env_id, opt_name, q_optimizer, use_wandb):
         jax.block_until_ready(state)
         end = time.perf_counter()
 
-        SPS = int(num_steps / (end - start))
+        SPS = int(num_steps * num_seeds / (end - start))
 
         mask = logs.pop("returned_episode")
         episode_returns = jnp.where(mask, logs.pop("returned_episode_returns"), jnp.nan)

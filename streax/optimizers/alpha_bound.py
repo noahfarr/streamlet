@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -14,6 +15,7 @@ from streax.utils.typing import Array, PyTree
 class AlphaBoundConfig:
     alpha_init: float = 1.0
     eps: float = 1e-8
+    dtype: Any = struct.field(pytree_node=False, default=jnp.float32)
 
 
 @struct.dataclass(frozen=True)
@@ -57,10 +59,14 @@ class AlphaBound:
 
         def compute_update(trace_leaf):
             return (
-                broadcast(alpha, trace_leaf)
-                * broadcast(td_error, trace_leaf)
-                * trace_leaf
-            ).mean(axis=0)
+                (
+                    broadcast(alpha, trace_leaf)
+                    * broadcast(td_error, trace_leaf)
+                    * trace_leaf
+                )
+                .mean(axis=0)
+                .astype(self.cfg.dtype)
+            )
 
         updates = jax.tree.map(compute_update, trace)
 
@@ -68,7 +74,6 @@ class AlphaBound:
             {
                 f"{self.name}/step_size": alpha.mean(),
                 f"{self.name}/bound": bound.mean(),
-                f"{self.name}/update_norm": optax.global_norm(updates),
             }
         )
 

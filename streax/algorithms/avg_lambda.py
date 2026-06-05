@@ -6,7 +6,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -27,7 +26,7 @@ class AVGLambdaConfig:
     gamma: float
     alpha: float
     trace_lambda: float = 0.0
-    unroll: int = struct.field(pytree_node=False, default=2)
+    unroll: int = struct.field(pytree_node=False, default=4)
 
 
 @struct.dataclass(frozen=True)
@@ -146,9 +145,12 @@ class AVGLambda:
         td_scaler = state.td_scaler.update(r_ent, done, self.cfg.gamma)
         sigma = td_scaler.sigma()
 
-        q = self.critic_network.apply(
-            jax.lax.stop_gradient(state.critic_params), state.timestep.obs, action
-        )
+        def compute_q_value(params: PyTree, obs: Array, action: Array) -> Array:
+            return self.critic_network.apply(params, obs, action)
+
+        q, q_grads = jax.vmap(
+            jax.value_and_grad(compute_q_value), in_axes=(None, 0, 0)
+        )(state.critic_params, state.timestep.obs, action)
         td_error = (reward + not_done * self.cfg.gamma * target_v - q) / sigma
 
         def compute_actor_loss(actor_params: PyTree, obs: Array, key: Key) -> Array:
@@ -171,17 +173,10 @@ class AVGLambda:
             lambda p, u: p + u, state.actor_params, actor_updates
         )
 
-        def compute_q_value(params: PyTree, obs: Array, action: Array) -> Array:
-            return self.critic_network.apply(params, obs, action)
-
-        q_grads = jax.vmap(jax.grad(compute_q_value), in_axes=(None, 0, 0))(
-            state.critic_params, state.timestep.obs, action
-        )
-
         trace_decay = self.cfg.gamma * self.cfg.trace_lambda
         keep = trace_decay * (1.0 - state.timestep.done.astype(jnp.float32))
         critic_trace = jax.tree.map(
-            lambda t, g: broadcast(keep, t) * t + g, state.critic_trace, q_grads
+            lambda t, g: (broadcast(keep, t) * t + g).astype(t.dtype), state.critic_trace, q_grads
         )
 
         critic_updates, critic_optimizer_state = self.critic_optimizer.update(
@@ -200,9 +195,9 @@ class AVGLambda:
                 "critic/q": q.mean(),
                 "critic/target_v": target_v.mean(),
                 "critic/td_error": td_error.mean(),
+                "critic/absolute_td_error": jnp.abs(td_error).mean(),
                 "critic/sigma": sigma.mean(),
                 "critic/explained_variance": explained_variance,
-                "critic_trace/trace_norm": optax.global_norm(critic_trace),
             }
         )
 
