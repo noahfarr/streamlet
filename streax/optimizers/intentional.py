@@ -56,12 +56,16 @@ class Intentional:
             step=jnp.int32(0),
         )
 
+    def bootstrap(self, state, params, gradient, trace, bootstrap_fn, gamma, not_done):
+        return bootstrap_fn(params), None
+
     def update(
         self,
         state: IntentionalState,
         gradient: PyTree,
         trace: PyTree,
         td_error: Array,
+        curvature: Array | None = None,
     ) -> tuple[PyTree, IntentionalState]:
         cfg = self.cfg
         next_step = state.step + 1

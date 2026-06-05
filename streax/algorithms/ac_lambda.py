@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import lox
 from flax import core, struct
 
-from streax.optimizers import Implicit, ObGD, Optimizer
+from streax.optimizers import Optimizer
 from streax.utils import Timestep, Transition, canonicalize_dtype
 from streax.utils.typing import (
     Array,
@@ -134,31 +134,21 @@ class ACLambda:
         log_prob_grads = aux["log_prob_grads"]
         entropy_grads = aux["entropy_grads"]
 
-        def compute_td_error(params):
-            v = self.critic_network.apply(params, transition.first.obs)
-            critic_value = v.squeeze(-1)
-            next_v = self.critic_network.apply(params, transition.second.obs)
-            next_value = next_v.squeeze(-1)
-            td_error = (
+        def value_fn(params):
+            return self.critic_network.apply(params, transition.first.obs).squeeze(-1)
+
+        critic_value, critic_vjp = jax.vjp(value_fn, state.critic_params)
+        (critic_grads,) = critic_vjp(jnp.ones_like(critic_value))
+
+        def compute_td_error(next_value):
+            return (
                 transition.second.reward
                 + self.cfg.gamma * (1.0 - transition.second.done) * next_value
                 - critic_value
             )
-            return critic_value, td_error
-
-        critic_value, critic_vjp, td_error = jax.vjp(
-            compute_td_error, state.critic_params, has_aux=True
-        )
-        (critic_grads,) = critic_vjp(jnp.ones_like(critic_value))
 
         reset_trace = transition.second.done
         discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
-        actor_grads = jax.tree.map(
-            lambda lpg, eg: lpg
-            + jnp.sign(td_error) * self.cfg.entropy_coefficient * eg,
-            log_prob_grads,
-            entropy_grads,
-        )
 
         def accumulate(trace, gradient):
             return jax.tree.map(
@@ -171,45 +161,42 @@ class ACLambda:
                 trace,
             )
 
-        actor_trace = accumulate(state.actor_trace, actor_grads)
         critic_trace = accumulate(state.critic_trace, critic_grads)
+
+        def bootstrap_value(params):
+            return self.critic_network.apply(params, transition.second.obs).squeeze(-1)
+
+        not_done = 1.0 - transition.second.done.astype(jnp.float32)
+        next_value, curvature = self.critic_optimizer.bootstrap(
+            state.critic_optimizer_state,
+            state.critic_params,
+            critic_grads,
+            critic_trace,
+            bootstrap_value,
+            self.cfg.gamma,
+            not_done,
+        )
+        td_error = compute_td_error(next_value)
+
+        actor_grads = jax.tree.map(
+            lambda lpg, eg: lpg
+            + jnp.sign(td_error) * self.cfg.entropy_coefficient * eg,
+            log_prob_grads,
+            entropy_grads,
+        )
+        actor_trace = accumulate(state.actor_trace, actor_grads)
 
         actor_updates, actor_optimizer_state = self.actor_optimizer.update(
             state.actor_optimizer_state, actor_grads, actor_trace, td_error,
         )
 
-        if isinstance(self.critic_optimizer, Implicit) or (
-            isinstance(self.critic_optimizer, ObGD) and self.critic_optimizer.cfg.exact
-        ):
-            gradient_trace = sum(
-                jnp.sum(g * z)
-                for g, z in zip(
-                    jax.tree.leaves(critic_grads), jax.tree.leaves(critic_trace)
-                )
-            )
-
-            def bootstrap_value(params, obs):
-                return self.critic_network.apply(params, obs).squeeze(-1)
-
-            _, next_grad_trace = jax.jvp(
-                lambda params: bootstrap_value(params, transition.second.obs),
-                (state.critic_params,),
-                (critic_trace,),
-            )
-            curvature = gradient_trace - self.cfg.gamma * (
-                1.0 - transition.second.done.astype(jnp.float32)
-            ) * next_grad_trace
-            critic_updates, critic_optimizer_state = self.critic_optimizer.update(
-                state.critic_optimizer_state,
-                critic_grads,
-                critic_trace,
-                td_error,
-                curvature,
-            )
-        else:
-            critic_updates, critic_optimizer_state = self.critic_optimizer.update(
-                state.critic_optimizer_state, critic_grads, critic_trace, td_error,
-            )
+        critic_updates, critic_optimizer_state = self.critic_optimizer.update(
+            state.critic_optimizer_state,
+            critic_grads,
+            critic_trace,
+            td_error,
+            curvature,
+        )
 
         actor_params = jax.tree.map(
             lambda p, u: p + u,

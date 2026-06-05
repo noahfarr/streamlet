@@ -39,8 +39,14 @@ class AlphaBound:
         alpha = jnp.float32(self.cfg.alpha_init)
         return AlphaBoundState(alpha=alpha)
 
-    def precondition(self, state: AlphaBoundState, trace: PyTree) -> PyTree:
-        return trace
+    def bootstrap(self, state, params, gradient, trace, bootstrap_fn, gamma, not_done):
+        gradient_trace = sum(
+            jnp.sum(g * z)
+            for g, z in zip(jax.tree.leaves(gradient), jax.tree.leaves(trace))
+        )
+        next_value, next_grad_trace = jax.jvp(bootstrap_fn, (params,), (trace,))
+        curvature = gradient_trace - gamma * not_done * next_grad_trace
+        return next_value, curvature
 
     def update(
         self,

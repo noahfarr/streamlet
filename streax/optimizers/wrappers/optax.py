@@ -22,12 +22,16 @@ class OptaxOptimizer:
     def init(self, parameters: PyTree) -> OptaxOptimizerState:
         return OptaxOptimizerState(opt_state=self.tx.init(parameters))
 
+    def bootstrap(self, state, params, gradient, trace, bootstrap_fn, gamma, not_done):
+        return bootstrap_fn(params), None
+
     def update(
         self,
         state: OptaxOptimizerState,
         gradient: PyTree,
         trace: PyTree | None = None,
         td_error: Array | None = None,
+        curvature: Array | None = None,
     ) -> tuple[PyTree, OptaxOptimizerState]:
         if trace is None:
             grad = gradient

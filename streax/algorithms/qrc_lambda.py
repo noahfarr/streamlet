@@ -231,16 +231,6 @@ class QRCLambda:
                 h_value=h_values,
                 bias_trace=bias_trace,
             )
-            q_grads_final = jax.tree.map(
-                lambda z, g, b: (
-                    td_errors * z
-                    - h_values * g
-                    - bias_trace * b
-                ),
-                q_trace,
-                q_grads,
-                td_grads,
-            )
         else:
             q_updates = jax.tree.map(
                 lambda td_g: -bias_trace * td_g, td_grads

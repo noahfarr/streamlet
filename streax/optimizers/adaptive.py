@@ -43,12 +43,16 @@ class Adaptive:
         )
         return AdaptiveState(second_moment=second_moment)
 
+    def bootstrap(self, state, params, gradient, trace, bootstrap_fn, gamma, not_done):
+        return bootstrap_fn(params), None
+
     def update(
         self,
         state: AdaptiveState,
         gradient: PyTree,
         trace: PyTree,
         td_error: Array,
+        curvature: Array | None = None,
     ) -> tuple[PyTree, AdaptiveState]:
         cfg = self.cfg
         gamma_lambda = cfg.gamma * cfg.trace_lambda

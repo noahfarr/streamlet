@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import lox
 from flax import core, struct
 
-from streax.optimizers import AlphaBound, Calibrated, Implicit, ObGD, Optimizer
+from streax.optimizers import Optimizer
 from streax.utils import Timestep, Transition, canonicalize_dtype
 from streax.utils.typing import Array, Environment, EnvParams, EnvState, Key, PyTree
 
@@ -75,7 +75,7 @@ class QLambda:
     def _epsilon_greedy_action(
         self, key: Key, state: QLambdaState
     ) -> tuple[QLambdaState, Array, dict]:
-        random_key, _, sample_key = jax.random.split(key, 3)
+        random_key, sample_key = jax.random.split(key)
         state, random_action, _ = self._random_action(random_key, state)
 
         q_values, q_vjp = jax.vjp(
@@ -130,8 +130,7 @@ class QLambda:
     def _update_step(
         self, state: QLambdaState, key: Key, *, policy: Callable
     ) -> tuple[QLambdaState, None]:
-        step_key, _ = jax.random.split(key)
-        state, transition = self._step(state, step_key, policy=policy)
+        state, transition = self._step(state, key, policy=policy)
         state = self._update(state, transition)
         return state.replace(update_step=state.update_step + 1), None
 
@@ -152,59 +151,31 @@ class QLambda:
             lambda t, g: discount * t + g, state.q_trace, q_grads
         )
 
-        def compute_td_error(next_value):
-            return (
-                transition.second.reward
-                + self.cfg.gamma * next_value * (1.0 - transition.second.done)
-                - q_value
-            )
+        def bootstrap_value(params):
+            return self.q_network.apply(params, transition.second.obs).max(axis=-1)
 
-        if isinstance(self.q_optimizer, (Implicit, Calibrated, AlphaBound)) or (
-            isinstance(self.q_optimizer, ObGD) and self.q_optimizer.cfg.exact
-        ):
-            interaction_trace = q_trace
-            if isinstance(self.q_optimizer, (Calibrated, Implicit)):
-                interaction_trace = self.q_optimizer.precondition(
-                    state.q_optimizer_state, q_trace
-                )
-
-            gradient_trace = sum(
-                jnp.sum(g * z)
-                for g, z in zip(
-                    jax.tree.leaves(q_grads), jax.tree.leaves(interaction_trace)
-                )
-            )
-
-            def bootstrap_value(params, obs):
-                return self.q_network.apply(params, obs).max(axis=-1)
-
-            next_value, next_grad_trace = jax.jvp(
-                lambda params: bootstrap_value(params, transition.second.obs),
-                (state.q_params,),
-                (interaction_trace,),
-            )
-            td_error = compute_td_error(next_value)
-            not_done = 1.0 - transition.second.done.astype(jnp.float32)
-            curvature = gradient_trace - self.cfg.gamma * not_done * next_grad_trace
-
-            q_updates, q_optimizer_state = self.q_optimizer.update(
-                state.q_optimizer_state,
-                q_grads,
-                q_trace,
-                td_error,
-                curvature,
-            )
-        else:
-            next_value = self.q_network.apply(
-                state.q_params, transition.second.obs
-            ).max(axis=-1)
-            td_error = compute_td_error(next_value)
-            q_updates, q_optimizer_state = self.q_optimizer.update(
-                state.q_optimizer_state,
-                q_grads,
-                q_trace,
-                td_error,
-            )
+        not_done = 1.0 - transition.second.done.astype(jnp.float32)
+        next_value, curvature = self.q_optimizer.bootstrap(
+            state.q_optimizer_state,
+            state.q_params,
+            q_grads,
+            q_trace,
+            bootstrap_value,
+            self.cfg.gamma,
+            not_done,
+        )
+        td_error = (
+            transition.second.reward
+            + self.cfg.gamma * next_value * (1.0 - transition.second.done)
+            - q_value
+        )
+        q_updates, q_optimizer_state = self.q_optimizer.update(
+            state.q_optimizer_state,
+            q_grads,
+            q_trace,
+            td_error,
+            curvature,
+        )
 
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 

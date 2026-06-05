@@ -78,6 +78,20 @@ class Implicit:
             lambda v, t: t / (jnp.sqrt(v) + self.cfg.eps), state.second_moment, trace
         )
 
+    def bootstrap(self, state, params, gradient, trace, bootstrap_fn, gamma, not_done):
+        interaction_trace = self.precondition(state, trace)
+        gradient_trace = sum(
+            jnp.sum(g * z)
+            for g, z in zip(
+                jax.tree.leaves(gradient), jax.tree.leaves(interaction_trace)
+            )
+        )
+        next_value, next_grad_trace = jax.jvp(
+            bootstrap_fn, (params,), (interaction_trace,)
+        )
+        curvature = gradient_trace - gamma * not_done * next_grad_trace
+        return next_value, curvature
+
     def update(
         self,
         state: ImplicitState,

@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import lox
 from flax import core, struct
 
-from streax.optimizers import AlphaBound, Implicit, Calibrated, ObGD, Optimizer
+from streax.optimizers import Optimizer
 from streax.utils import Timestep, Transition, canonicalize_dtype
 from streax.utils.typing import (
     Array,
@@ -105,55 +105,27 @@ class TDLambda:
             lambda t, g: (discount * t + g).astype(t.dtype), state.value_trace, value_grads
         )
 
-        if isinstance(self.value_optimizer, (Implicit, Calibrated, AlphaBound)) or (
-            isinstance(self.value_optimizer, ObGD) and self.value_optimizer.cfg.exact
-        ):
-            interaction_trace = value_trace
-            if isinstance(self.value_optimizer, (Calibrated, Implicit)):
-                interaction_trace = self.value_optimizer.precondition(
-                    state.value_optimizer_state, value_trace
-                )
+        def bootstrap_value(params):
+            return self.value_network.apply(params, transition.second.obs).squeeze(-1)
 
-            gradient_trace = sum(
-                jnp.sum(g * z)
-                for g, z in zip(
-                    jax.tree.leaves(value_grads),
-                    jax.tree.leaves(interaction_trace),
-                )
-            )
-
-            def bootstrap_value(params, obs):
-                return self.value_network.apply(params, obs).squeeze(-1)
-
-            # The JVP primal is V(s'), the bootstrap value, so we reuse it for the
-            # TD error instead of a separate forward pass.
-            next_value, next_grad_trace = jax.jvp(
-                lambda params: bootstrap_value(params, transition.second.obs),
-                (state.value_params,),
-                (interaction_trace,),
-            )
-            td_error = compute_td_error(next_value)
-            not_done = 1.0 - transition.second.done.astype(jnp.float32)
-            curvature = gradient_trace - self.cfg.gamma * not_done * next_grad_trace
-
-            value_updates, value_optimizer_state = self.value_optimizer.update(
-                state.value_optimizer_state,
-                value_grads,
-                value_trace,
-                td_error,
-                curvature,
-            )
-        else:
-            next_value = self.value_network.apply(
-                state.value_params, transition.second.obs
-            ).squeeze(-1)
-            td_error = compute_td_error(next_value)
-            value_updates, value_optimizer_state = self.value_optimizer.update(
-                state.value_optimizer_state,
-                value_grads,
-                value_trace,
-                td_error,
-            )
+        not_done = 1.0 - transition.second.done.astype(jnp.float32)
+        next_value, curvature = self.value_optimizer.bootstrap(
+            state.value_optimizer_state,
+            state.value_params,
+            value_grads,
+            value_trace,
+            bootstrap_value,
+            self.cfg.gamma,
+            not_done,
+        )
+        td_error = compute_td_error(next_value)
+        value_updates, value_optimizer_state = self.value_optimizer.update(
+            state.value_optimizer_state,
+            value_grads,
+            value_trace,
+            td_error,
+            curvature,
+        )
 
         value_params = jax.tree.map(
             lambda p, u: p + u, state.value_params, value_updates

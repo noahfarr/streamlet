@@ -38,6 +38,17 @@ class ObGD:
         )
         return ObGDState(second_moment=second_moment, t_step=jnp.int32(0))
 
+    def bootstrap(self, state, params, gradient, trace, bootstrap_fn, gamma, not_done):
+        if not self.cfg.exact:
+            return bootstrap_fn(params), None
+        gradient_trace = sum(
+            jnp.sum(g * z)
+            for g, z in zip(jax.tree.leaves(gradient), jax.tree.leaves(trace))
+        )
+        next_value, next_grad_trace = jax.jvp(bootstrap_fn, (params,), (trace,))
+        curvature = gradient_trace - gamma * not_done * next_grad_trace
+        return next_value, curvature
+
     def update(
         self,
         state: ObGDState,
