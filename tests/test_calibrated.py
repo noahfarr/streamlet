@@ -99,11 +99,11 @@ def test_alpha_converges_to_first_over_second_moment():
     optimizer = Calibrated(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
-    trace = {"w": jnp.ones((1, 3))}
-    td_error = jnp.zeros((1,))
-    interaction = jnp.full((1,), x)
+    trace = {"w": jnp.ones((3,))}
+    td_error = jnp.asarray(0.0)
+    interaction = jnp.asarray(x)
 
-    state = optimizer.init(params, num_envs=1)
+    state = optimizer.init(params)
     for _ in range(5000):
         _, state = optimizer.update(state, params, trace, td_error, interaction)
 
@@ -122,12 +122,12 @@ def test_target_variance_term_shrinks_step():
     optimizer = Calibrated(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
-    trace = {"w": jnp.ones((1, 3))}  # ||z||^2 = 3
+    trace = {"w": jnp.ones((3,))}  # ||z||^2 = 3
     z_sq = 3.0
-    td_error = jnp.full((1,), delta)
-    interaction = jnp.full((1,), x)
+    td_error = jnp.asarray(delta)
+    interaction = jnp.asarray(x)
 
-    state = optimizer.init(params, num_envs=1)
+    state = optimizer.init(params)
     for _ in range(5000):
         _, state = optimizer.update(state, params, trace, td_error, interaction)
 
@@ -149,11 +149,11 @@ def test_nonpositive_mean_interaction_gates_step_off():
     optimizer = Calibrated(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
-    trace = {"w": jnp.ones((1, 3))}
-    td_error = jnp.ones((1,))
-    neg_x = jnp.full((1,), -1.0)
+    trace = {"w": jnp.ones((3,))}
+    td_error = jnp.asarray(1.0)
+    neg_x = jnp.asarray(-1.0)
 
-    state = optimizer.init(params, num_envs=1)
+    state = optimizer.init(params)
     for _ in range(2000):
         updates, state = optimizer.update(state, params, trace, td_error, neg_x)
 
@@ -171,11 +171,11 @@ def test_step_is_capped_at_one():
     optimizer = Calibrated(cfg=cfg)
 
     params = {"w": jnp.zeros((3,))}
-    trace = {"w": jnp.ones((1, 3))}
-    td_error = jnp.ones((1,))
-    interaction = jnp.full((1,), x)
+    trace = {"w": jnp.ones((3,))}
+    td_error = jnp.asarray(1.0)
+    interaction = jnp.asarray(x)
 
-    state = optimizer.init(params, num_envs=1)
+    state = optimizer.init(params)
     updates = None
     for _ in range(5000):
         updates, state = optimizer.update(state, params, trace, td_error, interaction)
@@ -183,21 +183,21 @@ def test_step_is_capped_at_one():
     uncapped = x / (x**2)
     assert uncapped > 1.0  # without the cap the step would overshoot
     assert jnp.allclose(calibrated_alpha(cfg, state), 1.0)
-    # update = mean over envs of alpha * td_error * z = 1.0 * 1.0 * 1.0
+    # update = alpha * td_error * z = 1.0 * 1.0 * 1.0
     assert jnp.allclose(updates["w"], 1.0, atol=1e-4)
 
 
 def test_update_equals_alpha_times_td_error_times_trace():
-    # The applied update is the mean over the env axis of alpha * delta * z.
+    # The applied update is alpha * delta * z.
     cfg = CalibratedConfig(beta=0.05, nu=0.0)
     optimizer = Calibrated(cfg=cfg)
 
     params = {"w": jnp.zeros((2,))}
-    trace = {"w": jnp.array([[1.0, 2.0], [3.0, 4.0]])}
-    td_error = jnp.array([0.5, -1.0])
-    interaction = jnp.array([2.0, 2.0])
+    trace = {"w": jnp.array([1.0, 2.0])}
+    td_error = jnp.asarray(0.5)
+    interaction = jnp.asarray(2.0)
 
-    state = optimizer.init(params, num_envs=2)
+    state = optimizer.init(params)
     updates, _ = optimizer.update(state, params, trace, td_error, interaction)
 
     # On the first step the moments are still zero, so the gated step is zero.
@@ -207,9 +207,7 @@ def test_update_equals_alpha_times_td_error_times_trace():
         updates, state = optimizer.update(state, params, trace, td_error, interaction)
 
     alpha = calibrated_alpha(cfg, state)
-    expected = (
-        alpha[:, None] * td_error[:, None] * trace["w"]
-    ).mean(axis=0)
+    expected = alpha * td_error * trace["w"]
     assert jnp.allclose(updates["w"], expected, atol=1e-4)
 
 
@@ -217,16 +215,16 @@ def test_update_is_jittable():
     cfg = CalibratedConfig()
     optimizer = Calibrated(cfg=cfg)
     params = {"w": jnp.ones((3,))}
-    trace = {"w": jnp.ones((2, 3))}
-    td_error = jnp.array([0.5, -0.5])
-    interaction = jnp.array([1.0, 2.0])
-    state = optimizer.init(params, num_envs=2)
+    trace = {"w": jnp.ones((3,))}
+    td_error = jnp.asarray(0.5)
+    interaction = jnp.asarray(1.0)
+    state = optimizer.init(params)
 
     updates, new_state = jax.jit(optimizer.update)(
         state, params, trace, td_error, interaction
     )
     assert jax.tree.leaves(updates)[0].shape == (3,)
-    assert new_state.m_hat.shape == (2,)
+    assert new_state.m_hat.shape == ()
 
 
 if __name__ == "__main__":

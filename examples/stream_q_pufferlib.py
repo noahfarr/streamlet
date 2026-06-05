@@ -42,13 +42,12 @@ seed = 0
 num_seeds = 10
 suite = "pufferlib"
 env_id = "CartPole-v1"
-num_envs = 1
 
 env, env_params = environment.make(
     f"{suite}::{env_id}",
     env_creator=pufferlib.emulation.GymnasiumPufferEnv,
     env_kwargs={"env_creator": lambda: gymnasium.make(env_id)},
-    batch_shape=(num_seeds, num_envs),
+    batch_shape=(num_seeds,),
     backend=pufferlib.vector.Serial,
     num_workers=1,
 )
@@ -60,7 +59,6 @@ env = NormalizeRewardWrapper(env)
 num_actions = env.action_space(env_params).n
 
 config = QLambdaConfig(
-    num_envs=num_envs,
     trace_lambda=0.8,
     gamma=0.99,
 )
@@ -112,7 +110,7 @@ agent = QLambda(
 
 init = jax.vmap(agent.init)
 train = jax.jit(
-    jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2
+    jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2, donate_argnums=1
 )
 
 group = f"q_lambda__{env_id}__obgd"

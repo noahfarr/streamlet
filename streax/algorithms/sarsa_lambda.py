@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Callable
 
 import flax.linen as nn
@@ -9,7 +8,7 @@ import lox
 from flax import core, struct
 
 from streax.optimizers import Implicit, ObGD, Optimizer
-from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
+from streax.utils import Timestep, Transition, canonicalize_dtype
 from streax.utils.typing import (
     Array,
     Environment,
@@ -22,7 +21,6 @@ from streax.utils.typing import (
 
 @struct.dataclass(frozen=True)
 class SARSALambdaConfig:
-    num_envs: int
     gamma: float
     trace_lambda: float
     unroll: int = struct.field(pytree_node=False, default=4)
@@ -56,7 +54,7 @@ class SARSALambda:
         action_space = self.env.action_space(self.env_params)
         random_action = jax.random.randint(
             random_key,
-            (self.cfg.num_envs, *action_space.shape),
+            action_space.shape,
             minval=0,
             maxval=action_space.n,
         )
@@ -64,11 +62,9 @@ class SARSALambda:
         greedy_action = jnp.argmax(q_values, axis=-1)
 
         epsilon = self.epsilon_schedule(step)
-        is_random = jax.random.uniform(sample_key, (self.cfg.num_envs,)) < epsilon
-        action = jnp.where(
-            broadcast(is_random, greedy_action), random_action, greedy_action
-        )
-        value = jnp.take_along_axis(q_values, action[:, None], axis=-1).squeeze(-1)
+        is_random = jax.random.uniform(sample_key, ()) < epsilon
+        action = jnp.where(is_random, random_action, greedy_action)
+        value = q_values[action]
         return action, value
 
     def _step(self, state: SARSALambdaState, key: Key) -> tuple[SARSALambdaState, Transition]:
@@ -76,15 +72,14 @@ class SARSALambda:
 
         action = state.next_action
 
-        step_keys = jax.random.split(step_key, self.cfg.num_envs)
-        next_obs, env_state, reward, done, info = jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(step_keys, state.env_state, action, self.env_params)
+        next_obs, env_state, reward, done, info = self.env.step(
+            step_key, state.env_state, action, self.env_params
+        )
         reward = jnp.asarray(reward, dtype=jnp.float32)
         done = jnp.asarray(done, dtype=jnp.bool_)
 
         next_action, next_value = self._sample_action(
-            sample_key, state.q_params, next_obs, state.step + self.cfg.num_envs
+            sample_key, state.q_params, next_obs, state.step + 1
         )
 
         transition = Transition(
@@ -95,7 +90,7 @@ class SARSALambda:
 
         return (
             state.replace(
-                step=state.step + self.cfg.num_envs,
+                step=state.step + 1,
                 timestep=Timestep(
                     obs=next_obs,
                     action=jnp.where(done, jnp.zeros_like(action), action),
@@ -122,31 +117,25 @@ class SARSALambda:
         next_action = transition.aux["next_action"]
         next_value = transition.aux["next_value"]
 
-        def compute_td_error(params):
-            q_values = self.q_network.apply(params, transition.first.obs)
-            q_value = jnp.take_along_axis(
-                q_values, action[:, None], axis=-1
-            ).squeeze(-1)
-            td_error = (
-                transition.second.reward
-                + self.cfg.gamma * next_value * (1.0 - transition.second.done)
-                - q_value
-            )
-            return q_value, td_error
-
-        q_values, q_vjp, td_error = jax.vjp(
-            compute_td_error, state.q_params, has_aux=True
+        q_values, q_vjp = jax.vjp(
+            lambda params: self.q_network.apply(params, transition.first.obs),
+            state.q_params,
         )
-        batch = self.cfg.num_envs
-        (q_grads,) = jax.vmap(q_vjp)(jnp.eye(batch, dtype=q_values.dtype))
+        q_value = q_values[action]
+        num_actions = q_values.shape[-1]
+        (q_grads,) = q_vjp(jax.nn.one_hot(action, num_actions, dtype=q_values.dtype))
+
+        td_error = (
+            transition.second.reward
+            + self.cfg.gamma * next_value * (1.0 - transition.second.done)
+            - q_value
+        )
 
         reset = transition.second.done
-        discount = jnp.broadcast_to(
-            jnp.float32(self.cfg.gamma * self.cfg.trace_lambda), reset.shape
-        )
+        discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
 
         q_trace = jax.tree.map(
-            lambda t, g: (broadcast(discount, t) * t + g).astype(t.dtype), state.q_trace, q_grads
+            lambda t, g: (discount * t + g).astype(t.dtype), state.q_trace, q_grads
         )
 
         if isinstance(self.q_optimizer, Implicit) or (
@@ -159,7 +148,7 @@ class SARSALambda:
                 )
 
             gradient_trace = sum(
-                jnp.sum(g * z, axis=tuple(range(1, g.ndim)))
+                jnp.sum(g * z)
                 for g, z in zip(
                     jax.tree.leaves(q_grads), jax.tree.leaves(interaction_trace)
                 )
@@ -168,16 +157,12 @@ class SARSALambda:
             def bootstrap_value(params, obs, a):
                 return self.q_network.apply(params, obs)[a]
 
-            def directional(obs, a, direction):
-                _, jvp_value = jax.jvp(
-                    lambda params: bootstrap_value(params, obs, a),
-                    (state.q_params,),
-                    (direction,),
-                )
-                return jvp_value
-
-            next_grad_trace = jax.vmap(directional)(
-                transition.second.obs, next_action, interaction_trace
+            _, next_grad_trace = jax.jvp(
+                lambda params: bootstrap_value(
+                    params, transition.second.obs, next_action
+                ),
+                (state.q_params,),
+                (interaction_trace,),
             )
             curvature = gradient_trace - self.cfg.gamma * (
                 1.0 - transition.second.done.astype(jnp.float32)
@@ -193,11 +178,11 @@ class SARSALambda:
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
         new_q_trace = jax.tree.map(
-            lambda t: jnp.where(broadcast(reset, t), jnp.zeros_like(t), t), q_trace
+            lambda t: jnp.where(reset, jnp.zeros_like(t), t), q_trace
         )
 
         log_dict = {
-            "q_network/q_value": q_values.mean(),
+            "q_network/q_value": q_value.mean(),
             "q_network/td_error": td_error.mean(),
             "q_network/absolute_td_error": jnp.abs(td_error).mean(),
             "training/epsilon": self.epsilon_schedule(state.step),
@@ -212,25 +197,17 @@ class SARSALambda:
 
     def init(self, key: Key) -> SARSALambdaState:
         env_key, q_key, action_key = jax.random.split(key, 3)
-        env_keys = jax.random.split(env_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            env_keys, self.env_params
-        )
+        obs, env_state = self.env.reset(env_key, self.env_params)
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
+            action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
         )
-        reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-        done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
-        timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
+        timestep = Timestep(obs=obs, action=action, reward=0.0, done=True)
         q_params = self.q_network.init(q_key, obs)
 
-        q_optimizer_state = self.q_optimizer.init(q_params, self.cfg.num_envs)
+        q_optimizer_state = self.q_optimizer.init(q_params)
 
-        q_trace = jax.tree.map(
-            lambda p: jnp.zeros((self.cfg.num_envs, *p.shape), dtype=p.dtype),
-            q_params,
-        )
+        q_trace = jax.tree.map(jnp.zeros_like, q_params)
 
         next_action, _ = self._sample_action(action_key, q_params, obs, jnp.int32(0))
 
@@ -248,7 +225,7 @@ class SARSALambda:
     def train(
         self, key: Key, state: SARSALambdaState, num_steps: int
     ) -> SARSALambdaState:
-        keys = jax.random.split(key, num_steps // self.cfg.num_envs)
+        keys = jax.random.split(key, num_steps)
         state, _ = jax.lax.scan(
             self._update_step, state, keys, unroll=self.cfg.unroll
         )
@@ -258,10 +235,7 @@ class SARSALambda:
         self, key: Key, state: SARSALambdaState, num_steps: int
     ) -> SARSALambdaState:
         reset_key, eval_key = jax.random.split(key)
-        reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            reset_keys, self.env_params
-        )
+        obs, env_state = self.env.reset(reset_key, self.env_params)
 
         action_space = self.env.action_space(self.env_params)
         first_action = jnp.argmax(self.q_network.apply(state.q_params, obs), axis=-1)
@@ -270,20 +244,19 @@ class SARSALambda:
             timestep=Timestep(
                 obs=obs,
                 action=jnp.zeros(
-                    (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
+                    action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
                 ),
-                reward=jnp.zeros(self.cfg.num_envs),
-                done=jnp.ones(self.cfg.num_envs, dtype=jnp.bool_),
+                reward=0.0,
+                done=True,
             ),
             next_action=first_action,
             env_state=env_state,
         )
 
         def greedy_step(state: SARSALambdaState, key: Key):
-            step_keys = jax.random.split(key, self.cfg.num_envs)
-            next_obs, env_state, reward, done, info = jax.vmap(
-                self.env.step, in_axes=(0, 0, 0, None)
-            )(step_keys, state.env_state, state.next_action, self.env_params)
+            next_obs, env_state, reward, done, info = self.env.step(
+                key, state.env_state, state.next_action, self.env_params
+            )
             next_action = jnp.argmax(
                 self.q_network.apply(state.q_params, next_obs), axis=-1
             )

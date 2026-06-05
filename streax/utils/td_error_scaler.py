@@ -43,8 +43,8 @@ class TDErrorScalerState:
     G: Array
 
     @classmethod
-    def init(cls, num_envs: int) -> "TDErrorScalerState":
-        shape = (num_envs,)
+    def init(cls) -> "TDErrorScalerState":
+        shape = ()
         return cls(
             reward_rms=RunningStats.init(shape),
             gamma_rms=RunningStats.init(shape),

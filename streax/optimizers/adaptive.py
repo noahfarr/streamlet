@@ -4,10 +4,8 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import struct
 
-from streax.utils import broadcast
 from streax.utils.typing import Array, PyTree
 
 
@@ -38,9 +36,9 @@ class Adaptive:
     cfg: AdaptiveConfig
     name: str = "adaptive"
 
-    def init(self, parameters: PyTree, num_envs: int) -> AdaptiveState:
+    def init(self, parameters: PyTree) -> AdaptiveState:
         second_moment = jax.tree.map(
-            lambda p: jnp.zeros((num_envs, *p.shape), dtype=self.cfg.dtype),
+            lambda p: jnp.zeros(p.shape, dtype=self.cfg.dtype),
             parameters,
         )
         return AdaptiveState(second_moment=second_moment)
@@ -67,11 +65,7 @@ class Adaptive:
 
         def compute_update(z, v):
             rho = z / (jnp.sqrt(v) + cfg.eps)
-            return (
-                (cfg.eta * broadcast(clipped_delta, rho) * rho)
-                .mean(axis=0)
-                .astype(cfg.dtype)
-            )
+            return (cfg.eta * clipped_delta * rho).astype(cfg.dtype)
 
         updates = jax.tree.map(compute_update, trace, new_v)
 

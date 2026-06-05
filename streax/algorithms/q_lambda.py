@@ -6,24 +6,15 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
-from streax.optimizers import AlphaBound, Implicit, Calibrated, ObGD, Optimizer
-from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
-from streax.utils.typing import (
-    Array,
-    Environment,
-    EnvParams,
-    EnvState,
-    Key,
-    PyTree,
-)
+from streax.optimizers import AlphaBound, Calibrated, Implicit, ObGD, Optimizer
+from streax.utils import Timestep, Transition, canonicalize_dtype
+from streax.utils.typing import Array, Environment, EnvParams, EnvState, Key, PyTree
 
 
 @struct.dataclass(frozen=True)
 class QLambdaConfig:
-    num_envs: int
     gamma: float
     trace_lambda: float
     unroll: int = struct.field(pytree_node=False, default=2)
@@ -52,12 +43,10 @@ class QLambda:
     def _value_and_grad(
         self, q_values: Array, q_vjp: Callable, action: Array
     ) -> tuple[Array, PyTree]:
-        q_value = jnp.take_along_axis(q_values, action[:, None], axis=-1).squeeze(-1)
-        num_envs = self.cfg.num_envs
+        q_value = q_values[action]
         num_actions = q_values.shape[-1]
-        onehot = jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
-        cotangent = jnp.eye(num_envs, dtype=q_values.dtype)[:, :, None] * onehot[None]
-        (q_grads,) = jax.vmap(q_vjp)(cotangent)
+        cotangent = jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
+        (q_grads,) = q_vjp(cotangent)
         return q_value, q_grads
 
     def _greedy_action(
@@ -70,7 +59,7 @@ class QLambda:
         action = jnp.argmax(q_values, axis=-1)
         q_value, q_grads = self._value_and_grad(q_values, q_vjp, action)
         aux = {
-            "non_greedy": jnp.zeros(self.cfg.num_envs, dtype=jnp.bool_),
+            "non_greedy": jnp.bool_(False),
             "q_value": q_value,
             "q_grads": q_grads,
         }
@@ -82,11 +71,11 @@ class QLambda:
         action_space = self.env.action_space(self.env_params)
         action = jax.random.randint(
             key,
-            (self.cfg.num_envs, *action_space.shape),
+            action_space.shape,
             minval=0,
             maxval=action_space.n,
         )
-        aux = {"non_greedy": jnp.ones(self.cfg.num_envs, dtype=jnp.bool_)}
+        aux = {"non_greedy": jnp.bool_(True)}
         return state, action, aux
 
     def _epsilon_greedy_action(
@@ -102,10 +91,8 @@ class QLambda:
         greedy_action = jnp.argmax(q_values, axis=-1)
 
         epsilon = self.epsilon_schedule(state.step)
-        is_random = jax.random.uniform(sample_key, (self.cfg.num_envs,)) < epsilon
-        action = jnp.where(
-            broadcast(is_random, greedy_action), random_action, greedy_action
-        )
+        is_random = jax.random.uniform(sample_key, ()) < epsilon
+        action = jnp.where(is_random, random_action, greedy_action)
         non_greedy = is_random & (random_action != greedy_action)
         q_value, q_grads = self._value_and_grad(q_values, q_vjp, action)
         aux = {"non_greedy": non_greedy, "q_value": q_value, "q_grads": q_grads}
@@ -117,10 +104,9 @@ class QLambda:
         action_key, step_key = jax.random.split(key)
         state, action, aux = policy(action_key, state)
 
-        step_keys = jax.random.split(step_key, self.cfg.num_envs)
-        next_obs, env_state, reward, done, info = jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(step_keys, state.env_state, action, self.env_params)
+        next_obs, env_state, reward, done, info = self.env.step(
+            step_key, state.env_state, action, self.env_params
+        )
         reward = jnp.asarray(reward, dtype=jnp.float32)
         done = jnp.asarray(done, dtype=jnp.bool_)
 
@@ -132,7 +118,7 @@ class QLambda:
 
         return (
             state.replace(
-                step=state.step + self.cfg.num_envs,
+                step=state.step + 1,
                 timestep=Timestep(
                     obs=next_obs,
                     action=jnp.where(done, jnp.zeros_like(action), action),
@@ -162,22 +148,19 @@ class QLambda:
         q_value = aux["q_value"]
         q_grads = aux["q_grads"]
 
-        next_q_values = self.q_network.apply(state.q_params, transition.second.obs)
-        next_value = next_q_values.max(axis=-1)
-        td_error = (
-            transition.second.reward
-            + self.cfg.gamma * next_value * (1.0 - transition.second.done)
-            - q_value
-        )
-
         reset = transition.second.done | non_greedy
-        discount = jnp.broadcast_to(
-            jnp.float32(self.cfg.gamma * self.cfg.trace_lambda), reset.shape
-        )
+        discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
 
         q_trace = jax.tree.map(
-            lambda t, g: broadcast(discount, t) * t + g, state.q_trace, q_grads
+            lambda t, g: discount * t + g, state.q_trace, q_grads
         )
+
+        def compute_td_error(next_value):
+            return (
+                transition.second.reward
+                + self.cfg.gamma * next_value * (1.0 - transition.second.done)
+                - q_value
+            )
 
         if isinstance(self.q_optimizer, (Implicit, Calibrated, AlphaBound)) or (
             isinstance(self.q_optimizer, ObGD) and self.q_optimizer.cfg.exact
@@ -189,7 +172,7 @@ class QLambda:
                 )
 
             gradient_trace = sum(
-                jnp.sum(g * z, axis=tuple(range(1, g.ndim)))
+                jnp.sum(g * z)
                 for g, z in zip(
                     jax.tree.leaves(q_grads), jax.tree.leaves(interaction_trace)
                 )
@@ -198,17 +181,12 @@ class QLambda:
             def bootstrap_value(params, obs):
                 return self.q_network.apply(params, obs).max(axis=-1)
 
-            def directional(obs, direction):
-                _, jvp_value = jax.jvp(
-                    lambda params: bootstrap_value(params, obs),
-                    (state.q_params,),
-                    (direction,),
-                )
-                return jvp_value
-
-            next_grad_trace = jax.vmap(directional)(
-                transition.second.obs, interaction_trace
+            next_value, next_grad_trace = jax.jvp(
+                lambda params: bootstrap_value(params, transition.second.obs),
+                (state.q_params,),
+                (interaction_trace,),
             )
+            td_error = compute_td_error(next_value)
             not_done = 1.0 - transition.second.done.astype(jnp.float32)
             curvature = gradient_trace - self.cfg.gamma * not_done * next_grad_trace
 
@@ -220,6 +198,10 @@ class QLambda:
                 curvature,
             )
         else:
+            next_value = self.q_network.apply(
+                state.q_params, transition.second.obs
+            ).max(axis=-1)
+            td_error = compute_td_error(next_value)
             q_updates, q_optimizer_state = self.q_optimizer.update(
                 state.q_optimizer_state,
                 q_grads,
@@ -230,7 +212,7 @@ class QLambda:
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
         new_q_trace = jax.tree.map(
-            lambda t: jnp.where(broadcast(reset, t), jnp.zeros_like(t), t), q_trace
+            lambda t: jnp.where(reset, jnp.zeros_like(t), t), q_trace
         )
 
         log_dict = {
@@ -250,26 +232,18 @@ class QLambda:
 
     def init(self, key: Key) -> QLambdaState:
         env_key, q_key = jax.random.split(key)
-        env_keys = jax.random.split(env_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            env_keys, self.env_params
-        )
+        obs, env_state = self.env.reset(env_key, self.env_params)
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape),
+            action_space.shape,
             dtype=canonicalize_dtype(action_space.dtype),
         )
-        reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-        done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
-        timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
+        timestep = Timestep(obs=obs, action=action, reward=0.0, done=True)
         q_params = self.q_network.init(q_key, obs)
 
-        q_optimizer_state = self.q_optimizer.init(q_params, self.cfg.num_envs)
+        q_optimizer_state = self.q_optimizer.init(q_params)
 
-        q_trace = jax.tree.map(
-            lambda p: jnp.zeros((self.cfg.num_envs, *p.shape), dtype=p.dtype),
-            q_params,
-        )
+        q_trace = jax.tree.map(jnp.zeros_like, q_params)
 
         state = dict(
             step=0,
@@ -284,7 +258,7 @@ class QLambda:
         return QLambdaState(**state)
 
     def warmup(self, key: Key, state: QLambdaState, num_steps: int) -> QLambdaState:
-        step_keys = jax.random.split(key, num_steps // self.cfg.num_envs)
+        step_keys = jax.random.split(key, num_steps)
         state, _ = jax.lax.scan(
             partial(self._step, policy=self._random_action),
             state,
@@ -294,7 +268,7 @@ class QLambda:
         return state
 
     def train(self, key: Key, state: QLambdaState, num_steps: int) -> QLambdaState:
-        keys = jax.random.split(key, num_steps // self.cfg.num_envs)
+        keys = jax.random.split(key, num_steps)
         state, _ = jax.lax.scan(
             partial(self._update_step, policy=self._epsilon_greedy_action),
             state,
@@ -305,10 +279,7 @@ class QLambda:
 
     def evaluate(self, key: Key, state: QLambdaState, num_steps: int) -> QLambdaState:
         reset_key, eval_key = jax.random.split(key)
-        reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            reset_keys, self.env_params
-        )
+        obs, env_state = self.env.reset(reset_key, self.env_params)
 
         action_space = self.env.action_space(self.env_params)
         state = state.replace(
@@ -316,11 +287,11 @@ class QLambda:
             timestep=Timestep(
                 obs=obs,
                 action=jnp.zeros(
-                    (self.cfg.num_envs, *action_space.shape),
+                    action_space.shape,
                     dtype=canonicalize_dtype(action_space.dtype),
                 ),
-                reward=jnp.zeros(self.cfg.num_envs),
-                done=jnp.ones(self.cfg.num_envs, dtype=jnp.bool_),
+                reward=0.0,
+                done=True,
             ),
             env_state=env_state,
         )

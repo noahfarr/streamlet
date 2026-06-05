@@ -69,12 +69,12 @@ def value_network():
 
 
 env, env_params = build_env()
-config = TDLambdaConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
+config = TDLambdaConfig(gamma=gamma, trace_lambda=trace_lambda)
 value_optimizer = ObGD(cfg=ObGDConfig(lr=lr, kappa=kappa), name="value_optimizer")
 agent = TDLambda(config, env, env_params, value_network(), value_optimizer)
 
 init = jax.vmap(agent.init)
-train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2)
+train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2, donate_argnums=1)
 
 key = jax.random.key(seed)
 key, init_key = jax.random.split(key)

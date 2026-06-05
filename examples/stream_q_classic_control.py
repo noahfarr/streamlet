@@ -44,7 +44,6 @@ env = NormalizeRewardWrapper(env)
 num_actions = env.action_space(env_params).n
 
 config = QLambdaConfig(
-    num_envs=1,
     trace_lambda=0.8,
     gamma=0.99,
 )
@@ -96,7 +95,7 @@ agent = QLambda(
 
 init = jax.vmap(agent.init)
 train = jax.jit(
-    jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2
+    jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2, donate_argnums=1
 )
 
 group = f"q_lambda__{env_id}__obgd"

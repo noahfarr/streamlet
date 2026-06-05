@@ -92,7 +92,7 @@ def test_alphabound_integrates_with_tdlambda():
     import lox
 
     env, params = environment.make("rarespike::Spike", M=3.0, p=0.03)
-    config = TDLambdaConfig(num_envs=1, gamma=0.0, trace_lambda=0.0)
+    config = TDLambdaConfig(gamma=0.0, trace_lambda=0.0)
     network = nn.Dense(1, use_bias=False, kernel_init=nn.initializers.constant(1.0))
     agent = TDLambda(config, env, params, network, AlphaBound(cfg=AlphaBoundConfig()))
 

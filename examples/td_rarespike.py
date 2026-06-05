@@ -72,7 +72,7 @@ A = mean_interaction(M, p, gamma)
 E_X2 = second_moment_interaction(M, p, gamma)
 
 env, env_params = environment.make("rarespike::Spike", M=M, p=p)
-config = TDLambdaConfig(num_envs=1, gamma=gamma, trace_lambda=0.0)
+config = TDLambdaConfig(gamma=gamma, trace_lambda=0.0)
 
 
 def value_network():

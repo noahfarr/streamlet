@@ -9,7 +9,7 @@ import lox
 from flax import core, struct
 
 from streax.optimizers import AlphaBound, Implicit, Calibrated, ObGD, Optimizer
-from streax.utils import Timestep, Transition, broadcast, canonicalize_dtype
+from streax.utils import Timestep, Transition, canonicalize_dtype
 from streax.utils.typing import (
     Array,
     Environment,
@@ -22,7 +22,6 @@ from streax.utils.typing import (
 
 @struct.dataclass(frozen=True)
 class TDLambdaConfig:
-    num_envs: int
     gamma: float
     trace_lambda: float
     unroll: int = struct.field(pytree_node=False, default=4)
@@ -50,13 +49,12 @@ class TDLambda:
     def _step(self, state: TDLambdaState, key: Key) -> tuple[TDLambdaState, Transition]:
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
+            action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
         )
 
-        step_keys = jax.random.split(key, self.cfg.num_envs)
-        next_obs, env_state, reward, done, info = jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(step_keys, state.env_state, action, self.env_params)
+        next_obs, env_state, reward, done, info = self.env.step(
+            key, state.env_state, action, self.env_params
+        )
         reward = jnp.asarray(reward, dtype=jnp.float32)
         done = jnp.asarray(done, dtype=jnp.bool_)
 
@@ -67,7 +65,7 @@ class TDLambda:
 
         return (
             state.replace(
-                step=state.step + self.cfg.num_envs,
+                step=state.step + 1,
                 timestep=Timestep(
                     obs=next_obs,
                     action=jnp.where(done, jnp.zeros_like(action), action),
@@ -87,33 +85,24 @@ class TDLambda:
         return state.replace(update_step=state.update_step + 1), None
 
     def _update(self, state: TDLambdaState, transition: Transition) -> TDLambdaState:
-        next_value = self.value_network.apply(
-            state.value_params, transition.second.obs
-        ).squeeze(-1)
+        def value_fn(params):
+            return self.value_network.apply(params, transition.first.obs).squeeze(-1)
 
-        def compute_td_error(params):
-            v = self.value_network.apply(params, transition.first.obs)
-            value = v.squeeze(-1)
-            td_error = (
+        value, value_vjp = jax.vjp(value_fn, state.value_params)
+        (value_grads,) = value_vjp(jnp.ones_like(value))
+
+        def compute_td_error(next_value):
+            return (
                 transition.second.reward
                 + self.cfg.gamma * (1.0 - transition.second.done) * next_value
                 - value
             )
-            return value, td_error
-
-        values, value_vjp, td_error = jax.vjp(
-            compute_td_error, state.value_params, has_aux=True
-        )
-        batch = self.cfg.num_envs
-        (value_grads,) = jax.vmap(value_vjp)(jnp.eye(batch, dtype=values.dtype))
 
         reset_trace = transition.second.done
-        discount = jnp.broadcast_to(
-            jnp.float32(self.cfg.gamma * self.cfg.trace_lambda), reset_trace.shape
-        )
+        discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
 
         value_trace = jax.tree.map(
-            lambda t, g: (broadcast(discount, t) * t + g).astype(t.dtype), state.value_trace, value_grads
+            lambda t, g: (discount * t + g).astype(t.dtype), state.value_trace, value_grads
         )
 
         if isinstance(self.value_optimizer, (Implicit, Calibrated, AlphaBound)) or (
@@ -126,7 +115,7 @@ class TDLambda:
                 )
 
             gradient_trace = sum(
-                jnp.sum(g * z, axis=tuple(range(1, g.ndim)))
+                jnp.sum(g * z)
                 for g, z in zip(
                     jax.tree.leaves(value_grads),
                     jax.tree.leaves(interaction_trace),
@@ -136,17 +125,14 @@ class TDLambda:
             def bootstrap_value(params, obs):
                 return self.value_network.apply(params, obs).squeeze(-1)
 
-            def directional(obs, direction):
-                _, jvp_value = jax.jvp(
-                    lambda params: bootstrap_value(params, obs),
-                    (state.value_params,),
-                    (direction,),
-                )
-                return jvp_value
-
-            next_grad_trace = jax.vmap(directional)(
-                transition.second.obs, interaction_trace
+            # The JVP primal is V(s'), the bootstrap value, so we reuse it for the
+            # TD error instead of a separate forward pass.
+            next_value, next_grad_trace = jax.jvp(
+                lambda params: bootstrap_value(params, transition.second.obs),
+                (state.value_params,),
+                (interaction_trace,),
             )
+            td_error = compute_td_error(next_value)
             not_done = 1.0 - transition.second.done.astype(jnp.float32)
             curvature = gradient_trace - self.cfg.gamma * not_done * next_grad_trace
 
@@ -158,6 +144,10 @@ class TDLambda:
                 curvature,
             )
         else:
+            next_value = self.value_network.apply(
+                state.value_params, transition.second.obs
+            ).squeeze(-1)
+            td_error = compute_td_error(next_value)
             value_updates, value_optimizer_state = self.value_optimizer.update(
                 state.value_optimizer_state,
                 value_grads,
@@ -170,7 +160,7 @@ class TDLambda:
         )
 
         new_value_trace = jax.tree.map(
-            lambda t: jnp.where(broadcast(reset_trace, t), jnp.zeros_like(t), t),
+            lambda t: jnp.where(reset_trace, jnp.zeros_like(t), t),
             value_trace,
         )
 
@@ -190,27 +180,17 @@ class TDLambda:
 
     def init(self, key: Key) -> TDLambdaState:
         env_key, value_key = jax.random.split(key)
-        env_keys = jax.random.split(env_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            env_keys, self.env_params
-        )
+        obs, env_state = self.env.reset(env_key, self.env_params)
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
+            action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
         )
-        reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-        done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
-        timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
+        timestep = Timestep(obs=obs, action=action, reward=0.0, done=True)
         value_params = self.value_network.init(value_key, obs)
 
-        value_optimizer_state = self.value_optimizer.init(
-            value_params, self.cfg.num_envs
-        )
+        value_optimizer_state = self.value_optimizer.init(value_params)
 
-        value_trace = jax.tree.map(
-            lambda p: jnp.zeros((self.cfg.num_envs, *p.shape), dtype=p.dtype),
-            value_params,
-        )
+        value_trace = jax.tree.map(jnp.zeros_like, value_params)
 
         return TDLambdaState(
             step=0,
@@ -226,7 +206,7 @@ class TDLambda:
         return state
 
     def train(self, key: Key, state: TDLambdaState, num_steps: int) -> TDLambdaState:
-        keys = jax.random.split(key, num_steps // self.cfg.num_envs)
+        keys = jax.random.split(key, num_steps)
         state, _ = jax.lax.scan(
             self._update_step,
             state,
@@ -239,10 +219,7 @@ class TDLambda:
         self, key: Key, state: TDLambdaState, num_steps: int
     ) -> TDLambdaState:
         reset_key, eval_key = jax.random.split(key)
-        reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            reset_keys, self.env_params
-        )
+        obs, env_state = self.env.reset(reset_key, self.env_params)
 
         action_space = self.env.action_space(self.env_params)
         state = state.replace(
@@ -250,10 +227,10 @@ class TDLambda:
             timestep=Timestep(
                 obs=obs,
                 action=jnp.zeros(
-                    (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
+                    action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
                 ),
-                reward=jnp.zeros(self.cfg.num_envs),
-                done=jnp.ones(self.cfg.num_envs, dtype=jnp.bool_),
+                reward=0.0,
+                done=True,
             ),
             env_state=env_state,
         )

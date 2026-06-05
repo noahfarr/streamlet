@@ -59,7 +59,6 @@ env = NormalizeRewardWrapper(env, gamma=gamma)
 action_dim = env.action_space(env_params).shape[0]
 
 config = ACLambdaConfig(
-    num_envs=1,
     trace_lambda=trace_lambda,
     entropy_coefficient=0.01,
     gamma=gamma,
@@ -125,7 +124,7 @@ agent = ACLambda(
 
 
 init = jax.vmap(agent.init)
-train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2)
+train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2, donate_argnums=1)
 
 group = f"intentional-AC__{env_id}__intentional"
 

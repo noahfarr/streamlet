@@ -68,7 +68,6 @@ action_dim = env.action_space(env_params).shape[0]
 
 
 config = AVGLambdaConfig(
-    num_envs=1,
     gamma=gamma,
     alpha=alpha,
     trace_lambda=0.0,
@@ -133,7 +132,7 @@ agent = AVGLambda(
 
 
 init = jax.vmap(agent.init)
-train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2)
+train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2, donate_argnums=1)
 
 group = f"AVGLambda__{env_id}__adam"
 

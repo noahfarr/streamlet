@@ -4,10 +4,8 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import struct
 
-from streax.utils import broadcast
 from streax.utils.typing import Array, PyTree
 
 
@@ -37,8 +35,8 @@ class AlphaBound:
     cfg: AlphaBoundConfig
     name: str = "alpha_bound"
 
-    def init(self, parameters: PyTree, num_envs: int) -> AlphaBoundState:
-        alpha = jnp.full((num_envs,), self.cfg.alpha_init, dtype=jnp.float32)
+    def init(self, parameters: PyTree) -> AlphaBoundState:
+        alpha = jnp.float32(self.cfg.alpha_init)
         return AlphaBoundState(alpha=alpha)
 
     def precondition(self, state: AlphaBoundState, trace: PyTree) -> PyTree:
@@ -58,15 +56,7 @@ class AlphaBound:
         alpha = jnp.minimum(state.alpha, bound)
 
         def compute_update(trace_leaf):
-            return (
-                (
-                    broadcast(alpha, trace_leaf)
-                    * broadcast(td_error, trace_leaf)
-                    * trace_leaf
-                )
-                .mean(axis=0)
-                .astype(self.cfg.dtype)
-            )
+            return (alpha * td_error * trace_leaf).astype(self.cfg.dtype)
 
         updates = jax.tree.map(compute_update, trace)
 

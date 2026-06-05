@@ -110,12 +110,12 @@ CONFIGS = {
 
 def run_config(name, optimizer, env, env_params, num_actions, init_key, train_key):
     """Train `--num_seeds` seeds and return host-side numpy logs (seeds x steps)."""
-    config = QLambdaConfig(num_envs=1, gamma=gamma, trace_lambda=trace_lambda)
+    config = QLambdaConfig(gamma=gamma, trace_lambda=trace_lambda)
     network = make_network(num_actions)
     agent = QLambda(config, env, env_params, network, epsilon_schedule, optimizer)
 
     init = jax.vmap(agent.init)
-    train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2)
+    train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2, donate_argnums=1)
 
     # SAME init/train keys across configs -> identical network init and env-seed
     # stream; only the learning rule differs.

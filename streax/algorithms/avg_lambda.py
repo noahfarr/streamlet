@@ -9,7 +9,7 @@ import lox
 from flax import core, struct
 
 from streax.optimizers import Optimizer
-from streax.utils import Timestep, Transition, TDErrorScalerState, broadcast, canonicalize_dtype
+from streax.utils import Timestep, Transition, TDErrorScalerState, canonicalize_dtype
 from streax.utils.typing import (
     Array,
     Environment,
@@ -22,7 +22,6 @@ from streax.utils.typing import (
 
 @struct.dataclass(frozen=True)
 class AVGLambdaConfig:
-    num_envs: int
     gamma: float
     alpha: float
     trace_lambda: float = 0.0
@@ -62,10 +61,7 @@ class AVGLambda:
     def _stochastic_action(
         self, key: Key, state: AVGLambdaState
     ) -> tuple[Array, Array]:
-        keys = jax.random.split(key, self.cfg.num_envs)
-        return jax.vmap(self._sample_action, in_axes=(None, 0, 0))(
-            state.actor_params, state.timestep.obs, keys
-        )
+        return self._sample_action(state.actor_params, state.timestep.obs, key)
 
     def _deterministic_action(
         self, key: Key, state: AVGLambdaState
@@ -81,10 +77,9 @@ class AVGLambda:
         action_key, step_key = jax.random.split(key)
         action, log_prob = policy(action_key, state)
 
-        step_keys = jax.random.split(step_key, self.cfg.num_envs)
-        next_obs, env_state, reward, done, info = jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(step_keys, state.env_state, action, self.env_params)
+        next_obs, env_state, reward, done, info = self.env.step(
+            step_key, state.env_state, action, self.env_params
+        )
         reward = jnp.asarray(reward, dtype=jnp.float32)
         done = jnp.asarray(done, dtype=jnp.bool_)
 
@@ -96,12 +91,10 @@ class AVGLambda:
 
         return (
             state.replace(
-                step=state.step + self.cfg.num_envs,
+                step=state.step + 1,
                 timestep=Timestep(
                     obs=next_obs,
-                    action=jnp.where(
-                        broadcast(done, action), jnp.zeros_like(action), action
-                    ),
+                    action=jnp.where(done, jnp.zeros_like(action), action),
                     reward=jnp.where(done, jnp.zeros_like(reward), reward),
                     done=done,
                 ),
@@ -114,18 +107,16 @@ class AVGLambda:
         self, state: AVGLambdaState, key: Key
     ) -> tuple[AVGLambdaState, None]:
         sample_key, step_key, next_action_key = jax.random.split(key, 3)
-        action_keys = jax.random.split(sample_key, self.cfg.num_envs)
 
-        action, log_prob = jax.vmap(self._sample_action, in_axes=(None, 0, 0))(
-            state.actor_params, state.timestep.obs, action_keys
+        action, log_prob = self._sample_action(
+            state.actor_params, state.timestep.obs, sample_key
         )
         action = jax.lax.stop_gradient(action)
         log_prob = jax.lax.stop_gradient(log_prob)
 
-        step_keys = jax.random.split(step_key, self.cfg.num_envs)
-        next_obs, env_state, reward, done, info = jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(step_keys, state.env_state, action, self.env_params)
+        next_obs, env_state, reward, done, info = self.env.step(
+            step_key, state.env_state, action, self.env_params
+        )
         reward = jnp.asarray(reward, dtype=jnp.float32)
         done = jnp.asarray(done, dtype=jnp.bool_)
         not_done = 1.0 - done.astype(jnp.float32)
@@ -148,9 +139,9 @@ class AVGLambda:
         def compute_q_value(params: PyTree, obs: Array, action: Array) -> Array:
             return self.critic_network.apply(params, obs, action)
 
-        q, q_grads = jax.vmap(
-            jax.value_and_grad(compute_q_value), in_axes=(None, 0, 0)
-        )(state.critic_params, state.timestep.obs, action)
+        q, q_grads = jax.value_and_grad(compute_q_value)(
+            state.critic_params, state.timestep.obs, action
+        )
         td_error = (reward + not_done * self.cfg.gamma * target_v - q) / sigma
 
         def compute_actor_loss(actor_params: PyTree, obs: Array, key: Key) -> Array:
@@ -161,11 +152,11 @@ class AVGLambda:
             )
             return self.cfg.alpha * reparam_log_prob - reparam_q
 
-        actor_losses, actor_grads = jax.vmap(
-            jax.value_and_grad(compute_actor_loss), in_axes=(None, 0, 0)
-        )(state.actor_params, state.timestep.obs, action_keys)
+        actor_loss, actor_grads = jax.value_and_grad(compute_actor_loss)(
+            state.actor_params, state.timestep.obs, sample_key
+        )
         actor_ascent = jax.tree.map(jnp.negative, actor_grads)
-        actor_td_error = jnp.ones((self.cfg.num_envs,), dtype=jnp.float32)
+        actor_td_error = jnp.float32(1.0)
         actor_updates, actor_optimizer_state = self.actor_optimizer.update(
             state.actor_optimizer_state, actor_grads, actor_ascent, actor_td_error
         )
@@ -176,7 +167,7 @@ class AVGLambda:
         trace_decay = self.cfg.gamma * self.cfg.trace_lambda
         keep = trace_decay * (1.0 - state.timestep.done.astype(jnp.float32))
         critic_trace = jax.tree.map(
-            lambda t, g: (broadcast(keep, t) * t + g).astype(t.dtype), state.critic_trace, q_grads
+            lambda t, g: (keep * t + g).astype(t.dtype), state.critic_trace, q_grads
         )
 
         critic_updates, critic_optimizer_state = self.critic_optimizer.update(
@@ -190,7 +181,7 @@ class AVGLambda:
         explained_variance = 1 - jnp.var(td_error) / (jnp.var(target) + 1e-8)
         lox.log(
             {
-                "actor/loss": actor_losses.mean(),
+                "actor/loss": actor_loss.mean(),
                 "actor/log_prob": log_prob.mean(),
                 "critic/q": q.mean(),
                 "critic/target_v": target_v.mean(),
@@ -203,13 +194,11 @@ class AVGLambda:
 
         return (
             state.replace(
-                step=state.step + self.cfg.num_envs,
+                step=state.step + 1,
                 update_step=state.update_step + 1,
                 timestep=Timestep(
                     obs=next_obs,
-                    action=jnp.where(
-                        broadcast(done, action), jnp.zeros_like(action), action
-                    ),
+                    action=jnp.where(done, jnp.zeros_like(action), action),
                     reward=jnp.where(done, jnp.zeros_like(reward), reward),
                     done=done,
                 ),
@@ -226,32 +215,20 @@ class AVGLambda:
 
     def init(self, key: Key) -> AVGLambdaState:
         env_key, actor_key, critic_key = jax.random.split(key, 3)
-        env_keys = jax.random.split(env_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            env_keys, self.env_params
-        )
+        obs, env_state = self.env.reset(env_key, self.env_params)
         action_space = self.env.action_space(self.env_params)
         action = jnp.zeros(
-            (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
+            action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
         )
-        reward = jnp.zeros((self.cfg.num_envs,), dtype=jnp.float32)
-        done = jnp.ones((self.cfg.num_envs,), dtype=jnp.bool_)
-        timestep = Timestep(obs=obs, action=action, reward=reward, done=done)
+        timestep = Timestep(obs=obs, action=action, reward=0.0, done=True)
 
         actor_params = self.actor_network.init(actor_key, obs)
         critic_params = self.critic_network.init(critic_key, obs, action)
 
-        actor_optimizer_state = self.actor_optimizer.init(
-            actor_params, self.cfg.num_envs
-        )
-        critic_optimizer_state = self.critic_optimizer.init(
-            critic_params, self.cfg.num_envs
-        )
+        actor_optimizer_state = self.actor_optimizer.init(actor_params)
+        critic_optimizer_state = self.critic_optimizer.init(critic_params)
 
-        critic_trace = jax.tree.map(
-            lambda p: jnp.zeros((self.cfg.num_envs, *p.shape), dtype=p.dtype),
-            critic_params,
-        )
+        critic_trace = jax.tree.map(jnp.zeros_like, critic_params)
 
         return AVGLambdaState(
             step=0,
@@ -263,14 +240,14 @@ class AVGLambda:
             critic_params=critic_params,
             critic_optimizer_state=critic_optimizer_state,
             critic_trace=critic_trace,
-            td_scaler=TDErrorScalerState.init(self.cfg.num_envs),
+            td_scaler=TDErrorScalerState.init(),
         )
 
     def warmup(self, key: Key, state: AVGLambdaState, num_steps: int) -> AVGLambdaState:
         return state
 
     def train(self, key: Key, state: AVGLambdaState, num_steps: int) -> AVGLambdaState:
-        keys = jax.random.split(key, num_steps // self.cfg.num_envs)
+        keys = jax.random.split(key, num_steps)
         state, _ = jax.lax.scan(
             self._update_step, state, keys, unroll=self.cfg.unroll
         )
@@ -284,20 +261,17 @@ class AVGLambda:
         deterministic: bool = True,
     ) -> AVGLambdaState:
         reset_key, eval_key = jax.random.split(key)
-        reset_keys = jax.random.split(reset_key, self.cfg.num_envs)
-        obs, env_state = jax.vmap(self.env.reset, in_axes=(0, None))(
-            reset_keys, self.env_params
-        )
+        obs, env_state = self.env.reset(reset_key, self.env_params)
         action_space = self.env.action_space(self.env_params)
         state = state.replace(
             step=0,
             timestep=Timestep(
                 obs=obs,
                 action=jnp.zeros(
-                    (self.cfg.num_envs, *action_space.shape), dtype=canonicalize_dtype(action_space.dtype)
+                    action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
                 ),
-                reward=jnp.zeros(self.cfg.num_envs),
-                done=jnp.ones(self.cfg.num_envs, dtype=jnp.bool_),
+                reward=0.0,
+                done=True,
             ),
             env_state=env_state,
         )
@@ -308,6 +282,6 @@ class AVGLambda:
         state, _ = jax.lax.scan(
             partial(self._step, policy=policy),
             state,
-            jax.random.split(eval_key, num_steps // self.cfg.num_envs),
+            jax.random.split(eval_key, num_steps),
         )
         return state

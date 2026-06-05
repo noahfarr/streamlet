@@ -5,10 +5,8 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import struct
 
-from streax.utils import broadcast
 from streax.utils.typing import Array, PyTree
 
 
@@ -46,17 +44,17 @@ class Calibrated:
     cfg: CalibratedConfig
     name: str = "calibrated"
 
-    def init(self, parameters: PyTree, num_envs: int) -> CalibratedState:
-        m_hat = s_hat = y_hat = jnp.zeros((num_envs,), dtype=jnp.float32)
+    def init(self, parameters: PyTree) -> CalibratedState:
+        m_hat = s_hat = y_hat = jnp.float32(0.0)
         v = None
         if self.cfg.precondition:
             v = jax.tree.map(
-                lambda p: jnp.zeros((num_envs, *p.shape), dtype=self.cfg.dtype),
+                lambda p: jnp.zeros(p.shape, dtype=self.cfg.dtype),
                 parameters,
             )
         d_hat = None
         if self.cfg.adaptive_clip:
-            d_hat = jnp.ones((num_envs,), dtype=jnp.float32)
+            d_hat = jnp.float32(1.0)
         step = jnp.zeros((), dtype=jnp.float32)
         return CalibratedState(
             m_hat=m_hat,
@@ -106,7 +104,7 @@ class Calibrated:
         direction = self.precondition(state, trace)
 
         def squared_norm(z_leaf):
-            return jnp.sum(jnp.square(z_leaf), axis=tuple(range(1, z_leaf.ndim)))
+            return jnp.sum(jnp.square(z_leaf))
 
         tree_norms = jax.tree.map(squared_norm, direction)
         squared_z_norm = jax.tree_util.tree_reduce(jnp.add, tree_norms)
@@ -124,15 +122,7 @@ class Calibrated:
         alpha = jnp.minimum(alpha, self.cfg.alpha_max)
 
         def compute_update(direction_leaf):
-            return (
-                (
-                    broadcast(alpha, direction_leaf)
-                    * broadcast(td_error, direction_leaf)
-                    * direction_leaf
-                )
-                .mean(axis=0)
-                .astype(self.cfg.dtype)
-            )
+            return (alpha * td_error * direction_leaf).astype(self.cfg.dtype)
 
         updates = jax.tree.map(compute_update, direction)
 

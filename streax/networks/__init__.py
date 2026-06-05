@@ -4,5 +4,4 @@ from .layers import (
     Identity,
     L2Normalize,
     LayerNorm,
-    RecurrentSequential,
 )

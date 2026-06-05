@@ -4,9 +4,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import struct
-from streax.utils import broadcast
 from streax.utils.typing import Array, PyTree
 
 
@@ -33,9 +31,9 @@ class ObGD:
     cfg: ObGDConfig
     name: str = "obgd"
 
-    def init(self, parameters: PyTree, num_envs: int) -> ObGDState:
+    def init(self, parameters: PyTree) -> ObGDState:
         second_moment = jax.tree.map(
-            lambda p: jnp.zeros((num_envs, *p.shape), dtype=self.cfg.dtype),
+            lambda p: jnp.zeros(p.shape, dtype=self.cfg.dtype),
             parameters,
         )
         return ObGDState(second_moment=second_moment, t_step=jnp.int32(0))
@@ -72,8 +70,7 @@ class ObGD:
         if cfg.adaptive:
             new_v = jax.tree.map(
                 lambda v, t: (
-                    cfg.beta2 * v
-                    + (1.0 - cfg.beta2) * jnp.square(broadcast(td_error, t) * t)
+                    cfg.beta2 * v + (1.0 - cfg.beta2) * jnp.square(td_error * t)
                 ).astype(cfg.dtype),
                 state.second_moment,
                 trace,
@@ -86,17 +83,11 @@ class ObGD:
                     v_hat,
                 )
             )
-            z_sum = sum(
-                jnp.sum(leaf, axis=tuple(range(1, leaf.ndim)))
-                for leaf in scaled_trace_leaves
-            )
+            z_sum = sum(jnp.sum(leaf) for leaf in scaled_trace_leaves)
         else:
             new_v = state.second_moment
             v_hat = None
-            z_sum = sum(
-                jnp.sum(jnp.abs(leaf), axis=tuple(range(1, leaf.ndim)))
-                for leaf in jax.tree.leaves(trace)
-            )
+            z_sum = sum(jnp.sum(jnp.abs(leaf)) for leaf in jax.tree.leaves(trace))
 
         delta_bar = jnp.maximum(jnp.abs(td_error), 1.0)
         if cfg.exact:
@@ -109,21 +100,14 @@ class ObGD:
 
             def compute_update(trace_leaf, v_hat_leaf):
                 return (
-                    broadcast(step_size, trace_leaf)
-                    * broadcast(td_error, trace_leaf)
-                    * trace_leaf
-                    / jnp.sqrt(v_hat_leaf + cfg.eps)
-                ).mean(axis=0)
+                    step_size * td_error * trace_leaf / jnp.sqrt(v_hat_leaf + cfg.eps)
+                )
 
             updates = jax.tree.map(compute_update, trace, v_hat)
         else:
 
             def compute_update(trace_leaf):
-                return (
-                    broadcast(step_size, trace_leaf)
-                    * broadcast(td_error, trace_leaf)
-                    * trace_leaf
-                ).mean(axis=0)
+                return step_size * td_error * trace_leaf
 
             updates = jax.tree.map(compute_update, trace)
 

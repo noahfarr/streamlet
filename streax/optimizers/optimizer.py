@@ -6,5 +6,5 @@ State = TypeVar("State")
 
 
 class Optimizer(Protocol[State]):
-    init: Callable[[PyTree, int], State]
+    init: Callable[[PyTree], State]
     update: Callable[..., tuple[PyTree, State]]

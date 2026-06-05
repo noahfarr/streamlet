@@ -4,10 +4,8 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import struct
 
-from streax.utils import broadcast
 from streax.utils.typing import Array, PyTree
 
 
@@ -58,17 +56,16 @@ class Implicit:
     cfg: ImplicitConfig
     name: str = "implicit"
 
-    def init(self, parameters: PyTree, num_envs: int) -> ImplicitState:
+    def init(self, parameters: PyTree) -> ImplicitState:
         second_moment = jax.tree.map(
-            lambda p: jnp.ones((num_envs, *p.shape), dtype=self.cfg.dtype),
+            lambda p: jnp.ones(p.shape, dtype=self.cfg.dtype),
             parameters,
         )
-        zeros = jnp.zeros((num_envs,), dtype=jnp.float32)
         return ImplicitState(
             second_moment=second_moment,
-            sigma=zeros,
-            squared_delta_ema=jnp.ones((num_envs,), dtype=jnp.float32),
-            absolute_delta_ema=zeros,
+            sigma=jnp.float32(0.0),
+            squared_delta_ema=jnp.float32(1.0),
+            absolute_delta_ema=jnp.float32(0.0),
             clip_step=jnp.int32(0),
             norm_step=jnp.int32(0),
             step=jnp.int32(0),
@@ -115,11 +112,11 @@ class Implicit:
         )
 
         squared_gradient_norm = sum(
-            jnp.sum(jnp.square(g) / m, axis=tuple(range(1, g.ndim)))
+            jnp.sum(jnp.square(g) / m)
             for g, m in zip(jax.tree.leaves(gradient), jax.tree.leaves(preconditioner))
         )
         squared_trace_norm = sum(
-            jnp.sum(jnp.square(t) / m, axis=tuple(range(1, t.ndim)))
+            jnp.sum(jnp.square(t) / m)
             for t, m in zip(jax.tree.leaves(trace), jax.tree.leaves(preconditioner))
         )
 
@@ -171,7 +168,7 @@ class Implicit:
 
         if qrc:
             bg = sum(
-                jnp.sum(b * g / m, axis=tuple(range(1, b.ndim)))
+                jnp.sum(b * g / m)
                 for b, g, m in zip(
                     jax.tree.leaves(td_error_grad),
                     jax.tree.leaves(gradient),
@@ -179,7 +176,7 @@ class Implicit:
                 )
             )
             bb = sum(
-                jnp.sum(b * b / m, axis=tuple(range(1, b.ndim)))
+                jnp.sum(b * b / m)
                 for b, m in zip(
                     jax.tree.leaves(td_error_grad),
                     jax.tree.leaves(preconditioner),
@@ -193,15 +190,8 @@ class Implicit:
             scale_b = bias_trace * base_step
             updates = jax.tree.map(
                 lambda z, g, b, m: (
-                    (
-                        broadcast(scale_z, z) * z
-                        - broadcast(scale_g, g) * g
-                        - broadcast(scale_b, b) * b
-                    )
-                    / m
-                )
-                .mean(axis=0)
-                .astype(cfg.dtype),
+                    (scale_z * z - scale_g * g - scale_b * b) / m
+                ).astype(cfg.dtype),
                 trace,
                 gradient,
                 td_error_grad,
@@ -210,9 +200,7 @@ class Implicit:
         else:
             scale = safe_delta * step_size
             updates = jax.tree.map(
-                lambda t, m: (broadcast(scale, t) * t / m)
-                .mean(axis=0)
-                .astype(cfg.dtype),
+                lambda t, m: (scale * t / m).astype(cfg.dtype),
                 trace,
                 preconditioner,
             )

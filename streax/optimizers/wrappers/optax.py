@@ -5,7 +5,6 @@ import lox
 import optax
 from flax import struct
 
-from streax.utils import broadcast
 from streax.utils.typing import Array, PyTree
 
 
@@ -20,7 +19,7 @@ class OptaxOptimizer:
     tx: optax.GradientTransformation
     name: str = "optimizer"
 
-    def init(self, parameters: PyTree, num_envs: int) -> OptaxOptimizerState:
+    def init(self, parameters: PyTree) -> OptaxOptimizerState:
         return OptaxOptimizerState(opt_state=self.tx.init(parameters))
 
     def update(
@@ -33,8 +32,6 @@ class OptaxOptimizer:
         if trace is None:
             grad = gradient
         else:
-            grad = jax.tree.map(
-                lambda leaf: -(broadcast(td_error, leaf) * leaf).mean(axis=0), trace
-            )
+            grad = jax.tree.map(lambda leaf: -(td_error * leaf), trace)
         updates, opt_state = self.tx.update(grad, state.opt_state)
         return updates, OptaxOptimizerState(opt_state=opt_state)

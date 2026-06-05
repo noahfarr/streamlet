@@ -4,11 +4,8 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import struct
 from streax.utils.typing import Array, PyTree
-
-from streax.utils import broadcast
 
 
 @struct.dataclass(frozen=True)
@@ -44,17 +41,16 @@ class Intentional:
     cfg: IntentionalConfig
     name: str = "intentional"
 
-    def init(self, parameters: PyTree, num_envs: int) -> IntentionalState:
+    def init(self, parameters: PyTree) -> IntentionalState:
         second_moment = jax.tree.map(
-            lambda p: jnp.zeros((num_envs, *p.shape), dtype=self.cfg.dtype),
+            lambda p: jnp.zeros(p.shape, dtype=self.cfg.dtype),
             parameters,
         )
-        zeros = jnp.zeros((num_envs,), dtype=jnp.float32)
         return IntentionalState(
             second_moment=second_moment,
-            sigma=zeros,
-            squared_delta_ema=jnp.ones((num_envs,), dtype=jnp.float32),
-            absolute_delta_ema=zeros,
+            sigma=jnp.float32(0.0),
+            squared_delta_ema=jnp.float32(1.0),
+            absolute_delta_ema=jnp.float32(0.0),
             clip_step=jnp.int32(0),
             norm_step=jnp.int32(0),
             step=jnp.int32(0),
@@ -87,11 +83,11 @@ class Intentional:
             preconditioner = jax.tree.map(jnp.ones_like, new_second_moment)
 
         squared_gradient_norm = sum(
-            jnp.sum(jnp.square(g) / m, axis=tuple(range(1, g.ndim)))
+            jnp.sum(jnp.square(g) / m)
             for g, m in zip(jax.tree.leaves(gradient), jax.tree.leaves(preconditioner))
         )
         squared_trace_norm = sum(
-            jnp.sum(jnp.square(t) / m, axis=tuple(range(1, t.ndim)))
+            jnp.sum(jnp.square(t) / m)
             for t, m in zip(jax.tree.leaves(trace), jax.tree.leaves(preconditioner))
         )
 
@@ -141,7 +137,7 @@ class Intentional:
 
         scale = safe_delta * step_size
         updates = jax.tree.map(
-            lambda t, m: (broadcast(scale, t) * t / m).mean(axis=0).astype(cfg.dtype),
+            lambda t, m: (scale * t / m).astype(cfg.dtype),
             trace,
             preconditioner,
         )
@@ -160,7 +156,7 @@ class Intentional:
                 f"{self.name}/step_size": step_size.mean(),
                 f"{self.name}/denominator": denominator.mean(),
                 f"{self.name}/sigma": new_sigma.mean(),
-                f"{self.name}/trace_norm": squared_trace_norm.mean(),
+                f"{self.name}/trace_norm": jnp.sqrt(squared_trace_norm).mean(),
             }
         )
         return updates, new_state

@@ -53,7 +53,6 @@ env = NormalizeRewardWrapper(env, gamma=gamma)
 num_actions = env.action_space(env_params).n
 
 config = SARSALambdaConfig(
-    num_envs=1,
     trace_lambda=trace_lambda,
     gamma=gamma,
 )
@@ -105,7 +104,7 @@ agent = SARSALambda(
 
 
 init = jax.vmap(agent.init)
-train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2)
+train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2, donate_argnums=1)
 
 group = f"sarsa_lambda__{env_id}__obgd"
 

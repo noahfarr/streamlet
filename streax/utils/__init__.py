@@ -17,10 +17,6 @@ def canonicalize_dtype(dtype: Any) -> Any:
     return jax.dtypes.canonicalize_dtype(dtype)
 
 
-def broadcast(scalar_batch: jax.Array, target_leaf: jax.Array) -> jax.Array:
-    return scalar_batch[(slice(None),) + (None,) * (target_leaf.ndim - 1)]
-
-
 def strip(
     fun: Callable,
     argnames: Iterable[str] | None = None,
