@@ -55,15 +55,6 @@ class QRCLambda:
     h_optimizer: Optimizer
     epsilon_schedule: Callable
 
-    def _value_and_grad(
-        self, q_values: Array, q_vjp: Callable, action: Array
-    ) -> tuple[Array, PyTree]:
-        q_value = q_values[action]
-        num_actions = q_values.shape[-1]
-        cotangent = jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
-        (q_grads,) = q_vjp(cotangent)
-        return q_value, q_grads
-
     def _greedy_action(
         self, key: Key, state: QRCLambdaState
     ) -> tuple[QRCLambdaState, Array, dict]:
@@ -72,7 +63,10 @@ class QRCLambda:
             state.q_params,
         )
         action = jnp.argmax(q_values, axis=-1)
-        q_value, q_grads = self._value_and_grad(q_values, q_vjp, action)
+        q_value = q_values[action]
+        (q_grads,) = q_vjp(
+            jax.nn.one_hot(action, q_values.shape[-1], dtype=q_values.dtype)
+        )
         aux = {
             "non_greedy": jnp.bool_(False),
             "q_value": q_value,
@@ -109,7 +103,10 @@ class QRCLambda:
         is_random = jax.random.uniform(sample_key, ()) < epsilon
         action = jnp.where(is_random, random_action, greedy_action)
         non_greedy = is_random & (random_action != greedy_action)
-        q_value, q_grads = self._value_and_grad(q_values, q_vjp, action)
+        q_value = q_values[action]
+        (q_grads,) = q_vjp(
+            jax.nn.one_hot(action, q_values.shape[-1], dtype=q_values.dtype)
+        )
         aux = {"non_greedy": non_greedy, "q_value": q_value, "q_grads": q_grads}
         return state, action, aux
 
