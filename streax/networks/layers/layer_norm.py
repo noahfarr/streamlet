@@ -8,7 +8,7 @@ import jax.numpy as jnp
 from streax.utils.typing import Array
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(3,))
+@partial(jax.custom_jvp, nondiff_argnums=(3,))
 def _layer_norm(x: Array, scale: Array, bias: Array, eps: float) -> Array:
     mean = x.mean(axis=-1, keepdims=True)
     centered = x - mean
@@ -17,33 +17,27 @@ def _layer_norm(x: Array, scale: Array, bias: Array, eps: float) -> Array:
     return x_hat * scale + bias
 
 
-def _layer_norm_fwd(x: Array, scale: Array, bias: Array, eps: float):
+@_layer_norm.defjvp
+def _layer_norm_jvp(eps: float, primals, tangents):
+    x, scale, bias = primals
+    dx, dscale, dbias = tangents
+
     mean = x.mean(axis=-1, keepdims=True)
     centered = x - mean
     var = jnp.mean(jnp.square(centered), axis=-1, keepdims=True)
     rstd = jax.lax.rsqrt(var + eps)
     x_hat = centered * rstd
     y = x_hat * scale + bias
-    return y, (x_hat, rstd, scale)
 
-
-def _layer_norm_bwd(eps: float, res, g: Array):
-    del eps
-    x_hat, rstd, scale = res
-    reduce_axes = tuple(range(g.ndim - 1))
-
-    g_bias = g.sum(axis=reduce_axes)
-    g_scale = jnp.sum(g * x_hat, axis=reduce_axes)
-
-    gy = g * scale
-    mean_gy = gy.mean(axis=-1, keepdims=True)
-    mean_gy_xhat = jnp.mean(gy * x_hat, axis=-1, keepdims=True)
-    g_x = rstd * (gy - mean_gy - x_hat * mean_gy_xhat)
-
-    return g_x, g_scale, g_bias
-
-
-_layer_norm.defvjp(_layer_norm_fwd, _layer_norm_bwd)
+    # d(x_hat) = rstd * (dx - mean(dx) - x_hat * mean(x_hat * dx)). The bracket is
+    # the same self-adjoint reduction used in the analytic backward, so reverse mode
+    # -- obtained by transposing this rule -- recovers the matmul-free VJP for free,
+    # while forward mode (the critic's curvature jvp) now works directly.
+    mean_dx = dx.mean(axis=-1, keepdims=True)
+    mean_dx_xhat = jnp.mean(dx * x_hat, axis=-1, keepdims=True)
+    dx_hat = rstd * (dx - mean_dx - x_hat * mean_dx_xhat)
+    dy = dx_hat * scale + x_hat * dscale + dbias
+    return y, dy
 
 
 class LayerNorm(nn.Module):

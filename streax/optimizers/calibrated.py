@@ -41,6 +41,24 @@ class CalibratedState:
 
 @dataclass
 class Calibrated:
+    """Calibrated (measured) step size for the critic of a streaming agent.
+
+    A single per-step scalar quadratic in the step size ``alpha`` minimizes the
+    next value-error second moment. With ``X`` the interaction (contraction-rate
+    sample, the bootstrap curvature) and ``y = delta^2 ||z||^2`` the
+    target-variance sample::
+
+        alpha = max(0, E[X]) / (E[X^2] + nu * E[y])
+
+    The ``max(0, .)`` is the expansiveness off-switch: a non-positive ``E[X]``
+    means no positive step contracts (the semi-gradient operator is asymmetric)
+    and the head freezes. The update uses the preconditioned direction ``z``, the
+    noise functional ``E[delta^2 ||z||^2]``, the update form ``alpha * delta * z``,
+    and the optional Huber / adaptive TD-error clipping. The caller must supply the
+    bootstrap curvature ``interaction``; the no-curvature (measured-policy-gradient)
+    path has been removed.
+    """
+
     cfg: CalibratedConfig
     name: str = "calibrated"
 
@@ -99,8 +117,14 @@ class Calibrated:
         gradient: PyTree,
         trace: PyTree,
         td_error: Array,
-        interaction: Array,
+        interaction: Array | None = None,
     ) -> tuple[PyTree, CalibratedState]:
+        if interaction is None:
+            raise ValueError(
+                "Calibrated requires the bootstrap curvature `interaction` "
+                "(critic mode); the no-curvature actor path has been removed. "
+                "Route this optimizer through the algorithm's curvature branch."
+            )
 
         step = state.step + 1.0
         d_hat = state.d_hat
@@ -123,25 +147,30 @@ class Calibrated:
         tree_norms = jax.tree.map(squared_norm, direction)
         squared_z_norm = jax.tree_util.tree_reduce(jnp.add, tree_norms)
 
+        # Streaming sample g_hat = delta * z (the update direction, pre-step).
+        g_hat = jax.tree.map(lambda z: td_error * z, direction)
         y_t = jnp.square(td_error) * squared_z_norm
 
+        # Measured critic step: alpha = max(0, E[X]) / (E[X^2] + nu E[y]). The gain
+        # is computed from the PRIOR (pre-update) moments, so it is F_{t-1}-
+        # measurable -- independent of the current sample it multiplies. That keeps
+        # alpha * delta * z an unbiased descent step (the fresh-moment alternative
+        # correlates the gain with its own direction) and gives a free warmup: the
+        # zero-initialized moments yield alpha = 0 until real statistics fill in.
         if self.cfg.adaptive_nu:
             nu = self.cfg.rho_target * state.s_hat / (state.y_hat + self.cfg.eps)
         else:
             nu = self.cfg.nu
+        numerator = jnp.maximum(0.0, state.m_hat)
+        denominator = state.s_hat + nu * state.y_hat
 
-        alpha = jnp.maximum(0.0, state.m_hat) / (
-            state.s_hat + nu * state.y_hat + self.cfg.eps
-        )
+        alpha = numerator / (denominator + self.cfg.eps)
         alpha = jnp.minimum(alpha, self.cfg.alpha_max)
 
-        def compute_update(direction_leaf):
-            return (alpha * td_error * direction_leaf).astype(self.cfg.dtype)
+        updates = jax.tree.map(lambda g: (alpha * g).astype(self.cfg.dtype), g_hat)
 
-        updates = jax.tree.map(compute_update, direction)
-
+        # Fold the current sample into the moment estimates for the next step.
         second_moment = jnp.square(interaction)
-
         m_hat = self.cfg.beta * state.m_hat + (1.0 - self.cfg.beta) * interaction
         s_hat = self.cfg.beta * state.s_hat + (1.0 - self.cfg.beta) * second_moment
         y_hat = self.cfg.beta * state.y_hat + (1.0 - self.cfg.beta) * y_t
@@ -156,22 +185,21 @@ class Calibrated:
                 gradient,
             )
 
-        lox.log(
-            {
-                f"{self.name}/step_size": alpha.mean(),
-                f"{self.name}/m_hat": m_hat.mean(),
-                f"{self.name}/s_hat": s_hat.mean(),
-                f"{self.name}/y_hat": y_hat.mean(),
-                f"{self.name}/nu": jnp.mean(jnp.asarray(nu)),
-                f"{self.name}/noise_ratio": (y_hat / (s_hat + self.cfg.eps)).mean(),
-                f"{self.name}/rho": (nu * y_hat / (s_hat + self.cfg.eps)).mean(),
-                f"{self.name}/expansive_fraction": (state.m_hat <= 0.0).mean(),
-                f"{self.name}/cv2": (
-                    s_hat / (jnp.square(m_hat) + self.cfg.eps) - 1.0
-                ).mean(),
-                f"{self.name}/absolute_td_error": jnp.abs(td_error).mean(),
-            }
-        )
+        log_dict = {
+            f"{self.name}/step_size": alpha.mean(),
+            f"{self.name}/y_hat": y_hat.mean(),
+            f"{self.name}/absolute_td_error": jnp.abs(td_error).mean(),
+            f"{self.name}/m_hat": m_hat.mean(),
+            f"{self.name}/s_hat": s_hat.mean(),
+            f"{self.name}/nu": jnp.mean(jnp.asarray(nu)),
+            f"{self.name}/noise_ratio": (y_hat / (s_hat + self.cfg.eps)).mean(),
+            f"{self.name}/rho": (nu * y_hat / (s_hat + self.cfg.eps)).mean(),
+            f"{self.name}/expansive_fraction": (state.m_hat <= 0.0).mean(),
+            f"{self.name}/cv2": (
+                s_hat / (jnp.square(m_hat) + self.cfg.eps) - 1.0
+            ).mean(),
+        }
+        lox.log(log_dict)
 
         return updates, CalibratedState(
             m_hat=m_hat,

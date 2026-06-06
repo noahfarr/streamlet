@@ -14,16 +14,37 @@ class GymnasiumState:
 
 
 class GymnasiumWrapper:
+    """Wrap a vectorized ``gymnasium`` env behind the gymnax step/reset API.
 
-    def __init__(self, environment):
+    The real env is stepped through ``jax.pure_callback`` so it composes with
+    the rest of the (jit/vmap-able) streax pipeline. Both discrete (``Discrete``)
+    and continuous (``Box``) action spaces are supported; continuous actions are
+    clipped to the action bounds before being handed to the env.
+
+    Multiple seeds are handled with the ``batch_shape`` trick from
+    :class:`PufferLibWrapper`: the callback is declared to return a single
+    environment's shapes, ``vmap`` prepends the seed axis, and the underlying
+    vec env (sized ``prod(batch_shape)``) steps one sub-env per seed. Each
+    sub-env keeps its own RNG, so seeds are independently randomized.
+    """
+
+    def __init__(self, environment, batch_shape: tuple[int, ...] = (1,)):
         self._environment = environment
-        self.num_envs = environment.num_envs
+        self.batch_shape = tuple(batch_shape)
 
         observation_space = environment.single_observation_space
         self.observation_shape = observation_space.shape
         self.observation_dtype = canonicalize_dtype(observation_space.dtype)
 
-        self.num_actions = environment.single_action_space.n
+        action_space = environment.single_action_space
+        self.discrete = hasattr(action_space, "n")
+        if self.discrete:
+            self.num_actions = int(action_space.n)
+        else:
+            self.action_shape = action_space.shape
+            self.action_dtype = canonicalize_dtype(action_space.dtype)
+            self._action_low = np.asarray(action_space.low, dtype=np.float32)
+            self._action_high = np.asarray(action_space.high, dtype=np.float32)
 
     @property
     def default_params(self) -> None:
@@ -33,6 +54,9 @@ class GymnasiumWrapper:
 
         def _reset(key):
             observation, _ = self._environment.reset()
+            observation = np.reshape(
+                observation, self.batch_shape + self.observation_shape
+            )
             return jnp.array(observation, dtype=self.observation_dtype)
 
         observation = jax.pure_callback(
@@ -54,15 +78,27 @@ class GymnasiumWrapper:
     ) -> tuple[Array, GymnasiumState, Array, Array, dict]:
 
         def _step(action):
-            action = np.asarray(action, dtype=np.int32)
+            if self.discrete:
+                action = np.asarray(action, dtype=np.int32).reshape((-1,))
+            else:
+                action = np.asarray(action, dtype=np.float32).reshape(
+                    (-1,) + self.action_shape
+                )
+                action = np.clip(action, self._action_low, self._action_high)
+
             observation, rewards, terminations, truncations, infos = (
                 self._environment.step(action)
             )
 
+            observation = np.reshape(
+                observation, self.batch_shape + self.observation_shape
+            )
+            rewards = np.reshape(rewards, self.batch_shape)
+            dones = np.reshape(terminations | truncations, self.batch_shape)
             return (
                 jnp.array(observation, dtype=self.observation_dtype),
                 jnp.array(rewards, dtype=jnp.float32),
-                jnp.array(terminations | truncations, dtype=jnp.bool_),
+                jnp.array(dones, dtype=jnp.bool_),
             )
 
         observation, rewards, dones = jax.pure_callback(
@@ -87,12 +123,20 @@ class GymnasiumWrapper:
             dtype=self.observation_dtype,
         )
 
-    def action_space(self, params=None) -> spaces.Discrete:
-        return spaces.Discrete(self.num_actions)
+    def action_space(self, params=None):
+        if self.discrete:
+            return spaces.Discrete(self.num_actions)
+        return spaces.Box(
+            low=jnp.asarray(self._action_low),
+            high=jnp.asarray(self._action_high),
+            shape=self.action_shape,
+            dtype=self.action_dtype,
+        )
 
 
-def make(env_id, num_envs=1, **kwargs) -> tuple:
+def make(env_id, batch_shape: tuple[int, ...] = (1,), **kwargs) -> tuple:
     import gymnasium
 
+    num_envs = int(np.prod(batch_shape))
     environment = gymnasium.make_vec(env_id, num_envs=num_envs, **kwargs)
-    return GymnasiumWrapper(environment), None
+    return GymnasiumWrapper(environment, batch_shape=batch_shape), None

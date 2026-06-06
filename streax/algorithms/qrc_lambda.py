@@ -64,8 +64,9 @@ class QRCLambda:
         )
         action = jnp.argmax(q_values, axis=-1)
         q_value = q_values[action]
+        num_actions = self.env.action_space(self.env_params).n
         (q_grads,) = q_vjp(
-            jax.nn.one_hot(action, q_values.shape[-1], dtype=q_values.dtype)
+            jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
         )
         aux = {
             "non_greedy": jnp.bool_(False),
@@ -104,8 +105,9 @@ class QRCLambda:
         action = jnp.where(is_random, random_action, greedy_action)
         non_greedy = is_random & (random_action != greedy_action)
         q_value = q_values[action]
+        num_actions = self.env.action_space(self.env_params).n
         (q_grads,) = q_vjp(
-            jax.nn.one_hot(action, q_values.shape[-1], dtype=q_values.dtype)
+            jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
         )
         aux = {"non_greedy": non_greedy, "q_value": q_value, "q_grads": q_grads}
         return state, action, aux

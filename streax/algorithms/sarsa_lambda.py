@@ -121,7 +121,7 @@ class SARSALambda:
             state.q_params,
         )
         q_value = q_values[action]
-        num_actions = q_values.shape[-1]
+        num_actions = self.env.action_space(self.env_params).n
         (q_grads,) = q_vjp(jax.nn.one_hot(action, num_actions, dtype=q_values.dtype))
 
         reset = transition.second.done

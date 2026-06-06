@@ -114,7 +114,7 @@ streax/
 ├─ examples/          # Runnable scripts (Q / SARSA / AC / TD, QRC, AVG on MinAtar, Brax & ETT)
 ├─ scripts/           # slurmpilot launchers (launch.py, minatar.py) + cluster config templates
 ├─ streax/
-   ├─ algorithms/     # QLambda, SARSALambda, ACLambda, TDLambda, QRCLambda, AVGLambda
+   ├─ algorithms/     # QLambda, SARSALambda, ACLambda, NACLambda, TDLambda, QRCLambda, AVGLambda
    ├─ optimizers/     # ObGD, AdaptiveQ, Implicit, Intentional, optax wrapper
    ├─ environments/   # Gymnax / Brax / ALE / Gymnasium / ETT adapters + wrappers
    ├─ networks/       # heads, layers, initializers
