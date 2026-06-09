@@ -132,23 +132,23 @@ class SARSALambda:
             lambda t, g: (discount * t + g).astype(t.dtype), state.q_trace, q_grads
         )
 
-        def bootstrap_value(params):
+        def get_next_q_value(params):
             q_values, _ = self.q_network.apply(params, transition.second.obs)
             return q_values[next_action]
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)
-        next_value, curvature = self.q_optimizer.bootstrap(
+        next_q_value, curvature = self.q_optimizer.bootstrap(
             state.q_optimizer_state,
             state.q_params,
             q_grads,
             q_trace,
-            bootstrap_value,
+            get_next_q_value,
             self.cfg.gamma,
             not_done,
         )
         td_error = (
             transition.second.reward
-            + self.cfg.gamma * next_value * (1.0 - transition.second.done)
+            + self.cfg.gamma * next_q_value * (1.0 - transition.second.done)
             - q_value
         )
         q_updates, q_optimizer_state = self.q_optimizer.update(

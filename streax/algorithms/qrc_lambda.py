@@ -163,25 +163,25 @@ class QRCLambda:
         action = transition.second.action
         aux = transition.aux
         non_greedy = aux["non_greedy"]
-        q_values = aux["q_value"]
+        q_value = aux["q_value"]
         q_grads = aux["q_grads"]
 
-        def next_value_fn(params):
+        def get_next_q_value(params):
             q_values, _ = self.q_network.apply(params, transition.second.obs)
             return q_values.max(axis=-1)
 
-        next_value, nv_vjp = jax.vjp(next_value_fn, state.q_params)
-        (next_value_grads,) = nv_vjp(jnp.ones_like(next_value))
+        next_q_value, nv_vjp = jax.vjp(get_next_q_value, state.q_params)
+        (next_q_value_grads,) = nv_vjp(jnp.ones_like(next_q_value))
 
-        td_errors = (
+        td_error = (
             transition.second.reward
-            + self.cfg.gamma * next_value * (1.0 - transition.second.done)
-            - q_values
+            + self.cfg.gamma * next_q_value * (1.0 - transition.second.done)
+            - q_value
         )
         coef = self.cfg.gamma * (1.0 - transition.second.done.astype(jnp.float32))
         td_grads = jax.tree.map(
             lambda nvg, qg: coef * nvg - qg,
-            next_value_grads,
+            next_q_value_grads,
             q_grads,
         )
 
@@ -205,7 +205,7 @@ class QRCLambda:
         bias_trace = discount * state.bias_trace + h_values
 
         h_updates = jax.tree.map(
-            lambda t, g, p: td_errors * t
+            lambda t, g, p: td_error * t
             - h_values * g
             - self.cfg.regularization_coefficient * p,
             h_trace,
@@ -236,7 +236,7 @@ class QRCLambda:
                 state.q_optimizer_state,
                 q_grads,
                 q_trace,
-                td_errors,
+                td_error,
                 curvature,
                 td_error_grad=td_grads,
                 h_value=h_values,
@@ -250,7 +250,7 @@ class QRCLambda:
             if self.cfg.gradient_correction:
                 q_updates = jax.tree.map(
                     lambda update, t, g: update
-                    + td_errors * t
+                    + td_error * t
                     - h_values * g,
                     q_updates,
                     q_trace,
@@ -274,13 +274,13 @@ class QRCLambda:
         )
         new_bias_trace = jnp.where(reset_trace, jnp.zeros_like(bias_trace), bias_trace)
 
-        q_target = q_values + td_errors
-        explained_variance = 1 - jnp.var(td_errors) / (jnp.var(q_target) + 1e-8)
+        target_q_value = q_value + td_error
+        explained_variance = 1 - jnp.var(td_error) / (jnp.var(target_q_value) + 1e-8)
         lox.log(
             {
-                "q_network/q_value": q_values.mean(),
-                "q_network/td_error": td_errors.mean(),
-                "q_network/absolute_td_error": jnp.abs(td_errors).mean(),
+                "q_network/q_value": q_value.mean(),
+                "q_network/td_error": td_error.mean(),
+                "q_network/absolute_td_error": jnp.abs(td_error).mean(),
                 "q_network/explained_variance": explained_variance,
                 "h_network/h_value": h_values.mean(),
                 "h_network/bias_trace": bias_trace.mean(),
@@ -351,7 +351,7 @@ class QRCLambda:
         return state
 
     def evaluate(
-        self, key: Key, state: QRCLambdaState, num_steps: int, deterministic: bool = True
+        self, key: Key, state: QRCLambdaState, num_steps: int
     ) -> QRCLambdaState:
         reset_key, eval_key = jax.random.split(key)
         obs, env_state = self.env.reset(reset_key, self.env_params)
@@ -369,9 +369,8 @@ class QRCLambda:
             env_state=env_state,
         )
 
-        policy = self._greedy_action if deterministic else self._epsilon_greedy_action
         state, _ = jax.lax.scan(
-            partial(self._step, policy=policy),
+            partial(self._step, policy=self._greedy_action),
             state,
             jax.random.split(eval_key, num_steps),
         )

@@ -52,11 +52,6 @@ class RecurrentTDLambda:
             timestep.done,
         )
 
-    def _reset_carry(self, carry: PyTree, done: Array) -> PyTree:
-        return jax.tree.map(
-            lambda leaf: jnp.where(done, jnp.zeros_like(leaf), leaf), carry
-        )
-
     def _step(
         self, state: RecurrentTDLambdaState, key: Key
     ) -> tuple[RecurrentTDLambdaState, Transition]:
@@ -65,11 +60,11 @@ class RecurrentTDLambda:
             action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
         )
 
-        (carry_next, value, aux), value_vjp = jax.vjp(
+        (next_carry, value, aux), value_vjp = jax.vjp(
             lambda p: self._apply(p, state.carry, state.timestep), state.value_params
         )
         (value_grads,) = value_vjp((
-            jax.tree.map(jnp.zeros_like, carry_next),
+            jax.tree.map(jnp.zeros_like, next_carry),
             jnp.ones_like(value),
             jax.tree.map(jnp.zeros_like, aux),
         ))
@@ -87,7 +82,7 @@ class RecurrentTDLambda:
             aux={
                 "value": value,
                 "value_grads": value_grads,
-                "carry_next": carry_next,
+                "next_carry": next_carry,
             },
         )
 
@@ -100,7 +95,7 @@ class RecurrentTDLambda:
                     reward=jnp.where(done, jnp.zeros_like(reward), reward),
                     done=done,
                 ),
-                carry=self._reset_carry(carry_next, done),
+                carry=next_carry,
                 env_state=env_state,
             ),
             transition,
@@ -118,7 +113,7 @@ class RecurrentTDLambda:
     ) -> RecurrentTDLambdaState:
         value = transition.aux["value"]
         value_grads = transition.aux["value_grads"]
-        carry_next = transition.aux["carry_next"]
+        next_carry = transition.aux["next_carry"]
 
         reset_trace = transition.second.done
         discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
@@ -129,8 +124,8 @@ class RecurrentTDLambda:
             value_grads,
         )
 
-        def bootstrap_value(params):
-            _, next_value, _ = self._apply(params, carry_next, transition.second)
+        def get_next_value(params):
+            _, next_value, _ = self._apply(params, next_carry, transition.second)
             return next_value.squeeze(-1)
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)
@@ -139,7 +134,7 @@ class RecurrentTDLambda:
             state.value_params,
             value_grads,
             value_trace,
-            bootstrap_value,
+            get_next_value,
             self.cfg.gamma,
             not_done,
         )

@@ -85,19 +85,12 @@ class TDLambda:
         return state.replace(update_step=state.update_step + 1), None
 
     def _update(self, state: TDLambdaState, transition: Transition) -> TDLambdaState:
-        def value_fn(params):
+        def get_value(params):
             value, _ = self.value_network.apply(params, transition.first.obs)
             return value.squeeze(-1)
 
-        value, value_vjp = jax.vjp(value_fn, state.value_params)
+        value, value_vjp = jax.vjp(get_value, state.value_params)
         (value_grads,) = value_vjp(jnp.ones_like(value))
-
-        def compute_td_error(next_value):
-            return (
-                transition.second.reward
-                + self.cfg.gamma * (1.0 - transition.second.done) * next_value
-                - value
-            )
 
         reset_trace = transition.second.done
         discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
@@ -106,7 +99,7 @@ class TDLambda:
             lambda t, g: (discount * t + g).astype(t.dtype), state.value_trace, value_grads
         )
 
-        def bootstrap_value(params):
+        def get_next_value(params):
             value, _ = self.value_network.apply(params, transition.second.obs)
             return value.squeeze(-1)
 
@@ -116,11 +109,15 @@ class TDLambda:
             state.value_params,
             value_grads,
             value_trace,
-            bootstrap_value,
+            get_next_value,
             self.cfg.gamma,
             not_done,
         )
-        td_error = compute_td_error(next_value)
+        td_error = (
+            transition.second.reward
+            + self.cfg.gamma * (1.0 - transition.second.done) * next_value
+            - value
+        )
         value_updates, value_optimizer_state = self.value_optimizer.update(
             state.value_optimizer_state,
             value_grads,

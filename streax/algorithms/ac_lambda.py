@@ -10,14 +10,7 @@ from flax import core, struct
 
 from streax.optimizers import Optimizer
 from streax.utils import Timestep, Transition, canonicalize_dtype
-from streax.utils.typing import (
-    Array,
-    Environment,
-    EnvParams,
-    EnvState,
-    Key,
-    PyTree,
-)
+from streax.utils.typing import Array, Environment, EnvParams, EnvState, Key, PyTree
 
 
 @struct.dataclass(frozen=True)
@@ -55,19 +48,19 @@ class ACLambda:
     def _stochastic_action(
         self, key: Key, state: ACLambdaState
     ) -> tuple[ACLambdaState, Array, dict]:
-        def actor_outputs(params):
+        def log_prob_and_entropy(params):
             dist, aux = self.actor_network.apply(params, state.timestep.obs)
             action, _ = dist.sample_and_log_prob(seed=key)
             action = jax.lax.stop_gradient(action)
             return (dist.log_prob(action), dist.entropy()), (action, aux)
 
         (log_prob, entropy), actor_vjp, (action, aux) = jax.vjp(
-            actor_outputs, state.actor_params, has_aux=True
+            log_prob_and_entropy, state.actor_params, has_aux=True
         )
-        one = jnp.ones_like(log_prob)
-        zero = jnp.zeros_like(log_prob)
-        (log_prob_grads,) = actor_vjp((one, zero))
-        (entropy_grads,) = actor_vjp((zero, one))
+        (log_prob_grads,) = actor_vjp(
+            (jnp.ones_like(log_prob), jnp.zeros_like(entropy))
+        )
+        (entropy_grads,) = actor_vjp((jnp.zeros_like(log_prob), jnp.ones_like(entropy)))
         aux = {
             **aux,
             "log_prob": log_prob,
@@ -135,19 +128,12 @@ class ACLambda:
         log_prob_grads = aux["log_prob_grads"]
         entropy_grads = aux["entropy_grads"]
 
-        def value_fn(params):
+        def get_value(params):
             critic_value, _ = self.critic_network.apply(params, transition.first.obs)
             return critic_value.squeeze(-1)
 
-        critic_value, critic_vjp = jax.vjp(value_fn, state.critic_params)
+        critic_value, critic_vjp = jax.vjp(get_value, state.critic_params)
         (critic_grads,) = critic_vjp(jnp.ones_like(critic_value))
-
-        def compute_td_error(next_value):
-            return (
-                transition.second.reward
-                + self.cfg.gamma * (1.0 - transition.second.done) * next_value
-                - critic_value
-            )
 
         reset_trace = transition.second.done
         discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
@@ -165,7 +151,7 @@ class ACLambda:
 
         critic_trace = accumulate(state.critic_trace, critic_grads)
 
-        def bootstrap_value(params):
+        def get_next_value(params):
             critic_value, _ = self.critic_network.apply(params, transition.second.obs)
             return critic_value.squeeze(-1)
 
@@ -175,11 +161,15 @@ class ACLambda:
             state.critic_params,
             critic_grads,
             critic_trace,
-            bootstrap_value,
+            get_next_value,
             self.cfg.gamma,
             not_done,
         )
-        td_error = compute_td_error(next_value)
+        td_error = (
+            transition.second.reward
+            + self.cfg.gamma * (1.0 - transition.second.done) * next_value
+            - critic_value
+        )
 
         actor_grads = jax.tree.map(
             lambda lpg, eg: lpg
@@ -190,7 +180,10 @@ class ACLambda:
         actor_trace = accumulate(state.actor_trace, actor_grads)
 
         actor_updates, actor_optimizer_state = self.actor_optimizer.update(
-            state.actor_optimizer_state, actor_grads, actor_trace, td_error,
+            state.actor_optimizer_state,
+            actor_grads,
+            actor_trace,
+            td_error,
         )
 
         critic_updates, critic_optimizer_state = self.critic_optimizer.update(
@@ -286,7 +279,6 @@ class ACLambda:
         key: Key,
         state: ACLambdaState,
         num_steps: int,
-        deterministic: bool = True,
     ) -> ACLambdaState:
         reset_key, eval_key = jax.random.split(key)
         obs, env_state = self.env.reset(reset_key, self.env_params)
@@ -305,9 +297,8 @@ class ACLambda:
             env_state=env_state,
         )
 
-        policy = self._deterministic_action if deterministic else self._stochastic_action
         state, _ = jax.lax.scan(
-            partial(self._step, policy=policy),
+            partial(self._step, policy=self._deterministic_action),
             state,
             jax.random.split(eval_key, num_steps),
         )

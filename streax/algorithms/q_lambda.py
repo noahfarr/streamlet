@@ -6,6 +6,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
+import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -29,6 +30,7 @@ class QLambdaState:
     q_params: core.FrozenDict[str, Any]
     q_trace: PyTree
     q_optimizer_state: PyTree
+    aux_optimizer_state: PyTree
 
 
 @dataclass
@@ -39,7 +41,8 @@ class QLambda:
     q_network: nn.Module
     epsilon_schedule: Callable
     q_optimizer: Optimizer
-    aux_loss: Callable | None = None
+    aux_loss: Callable = lambda params, transition: 0.0
+    aux_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
 
     def _greedy_action(
         self, key: Key, state: QLambdaState
@@ -152,22 +155,22 @@ class QLambda:
 
         q_trace = jax.tree.map(lambda t, g: discount * t + g, state.q_trace, q_grads)
 
-        def bootstrap_value(params):
+        def get_next_q_value(params):
             return self.q_network.apply(params, transition.second.obs).max(axis=-1)
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)
-        next_value, curvature = self.q_optimizer.bootstrap(
+        next_q_value, curvature = self.q_optimizer.bootstrap(
             state.q_optimizer_state,
             state.q_params,
             q_grads,
             q_trace,
-            bootstrap_value,
+            get_next_q_value,
             self.cfg.gamma,
             not_done,
         )
         td_error = (
             transition.second.reward
-            + self.cfg.gamma * next_value * (1.0 - transition.second.done)
+            + self.cfg.gamma * next_q_value * (1.0 - transition.second.done)
             - q_value
         )
         q_updates, q_optimizer_state = self.q_optimizer.update(
@@ -180,9 +183,11 @@ class QLambda:
 
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
-        if self.aux_loss is not None:
-            _, aux_grad = jax.value_and_grad(self.aux_loss)(q_params, transition)
-            q_params = jax.tree.map(lambda p, g: p - 0.001 * g, q_params, aux_grad)
+        _, aux_grads = jax.value_and_grad(self.aux_loss)(q_params, transition)
+        aux_updates, aux_optimizer_state = self.aux_optimizer.update(
+            aux_grads, state.aux_optimizer_state, q_params
+        )
+        q_params = optax.apply_updates(q_params, aux_updates)
 
         q_trace = jax.tree.map(
             lambda t: jnp.where(reset, jnp.zeros_like(t), t), q_trace
@@ -200,6 +205,7 @@ class QLambda:
             q_params=q_params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
+            aux_optimizer_state=aux_optimizer_state,
         )
 
         return state.replace(**new_state)
@@ -216,6 +222,7 @@ class QLambda:
         q_params = self.q_network.init(q_key, obs)
 
         q_optimizer_state = self.q_optimizer.init(q_params)
+        aux_optimizer_state = self.aux_optimizer.init(q_params)
 
         q_trace = jax.tree.map(jnp.zeros_like, q_params)
 
@@ -227,6 +234,7 @@ class QLambda:
             q_params=q_params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
+            aux_optimizer_state=aux_optimizer_state,
         )
 
         return QLambdaState(**state)

@@ -127,31 +127,31 @@ class AVGLambda:
         next_action, next_log_prob = next_dist.sample_and_log_prob(
             seed=next_action_key
         )
-        next_q, _ = self.critic_network.apply(
+        next_q_value, _ = self.critic_network.apply(
             jax.lax.stop_gradient(state.critic_params), next_obs, next_action
         )
-        target_v = next_q - self.cfg.alpha * next_log_prob
+        next_value = next_q_value - self.cfg.alpha * next_log_prob
 
-        r_ent = reward - self.cfg.alpha * log_prob
-        td_scaler = state.td_scaler.update(r_ent, done, self.cfg.gamma)
+        entropy_reward = reward - self.cfg.alpha * log_prob
+        td_scaler = state.td_scaler.update(entropy_reward, done, self.cfg.gamma)
         sigma = td_scaler.sigma()
 
-        def compute_q_value(params: PyTree, obs: Array, action: Array) -> Array:
+        def get_q_value(params: PyTree, obs: Array, action: Array) -> Array:
             q, _ = self.critic_network.apply(params, obs, action)
             return q
 
-        q, q_grads = jax.value_and_grad(compute_q_value)(
+        q_value, q_grads = jax.value_and_grad(get_q_value)(
             state.critic_params, state.timestep.obs, action
         )
-        td_error = (reward + not_done * self.cfg.gamma * target_v - q) / sigma
+        td_error = (reward + not_done * self.cfg.gamma * next_value - q_value) / sigma
 
         def compute_actor_loss(actor_params: PyTree, obs: Array, key: Key) -> Array:
             dist, _ = self.actor_network.apply(actor_params, obs)
-            reparam_action, reparam_log_prob = dist.sample_and_log_prob(seed=key)
-            reparam_q, _ = self.critic_network.apply(
-                jax.lax.stop_gradient(state.critic_params), obs, reparam_action
+            sampled_action, sampled_log_prob = dist.sample_and_log_prob(seed=key)
+            sampled_q, _ = self.critic_network.apply(
+                jax.lax.stop_gradient(state.critic_params), obs, sampled_action
             )
-            return self.cfg.alpha * reparam_log_prob - reparam_q
+            return self.cfg.alpha * sampled_log_prob - sampled_q
 
         actor_loss, actor_grads = jax.value_and_grad(compute_actor_loss)(
             state.actor_params, state.timestep.obs, sample_key
@@ -178,14 +178,14 @@ class AVGLambda:
             lambda p, u: p + u, state.critic_params, critic_updates
         )
 
-        target = q + td_error
+        target = q_value + td_error
         explained_variance = 1 - jnp.var(td_error) / (jnp.var(target) + 1e-8)
         lox.log(
             {
                 "actor/loss": actor_loss.mean(),
                 "actor/log_prob": log_prob.mean(),
-                "critic/q": q.mean(),
-                "critic/target_v": target_v.mean(),
+                "critic/q_value": q_value.mean(),
+                "critic/next_value": next_value.mean(),
                 "critic/td_error": td_error.mean(),
                 "critic/absolute_td_error": jnp.abs(td_error).mean(),
                 "critic/sigma": sigma.mean(),
@@ -259,7 +259,6 @@ class AVGLambda:
         key: Key,
         state: AVGLambdaState,
         num_steps: int,
-        deterministic: bool = True,
     ) -> AVGLambdaState:
         reset_key, eval_key = jax.random.split(key)
         obs, env_state = self.env.reset(reset_key, self.env_params)
@@ -277,11 +276,8 @@ class AVGLambda:
             env_state=env_state,
         )
 
-        policy = (
-            self._deterministic_action if deterministic else self._stochastic_action
-        )
         state, _ = jax.lax.scan(
-            partial(self._step, policy=policy),
+            partial(self._step, policy=self._deterministic_action),
             state,
             jax.random.split(eval_key, num_steps),
         )
