@@ -68,7 +68,6 @@ q_network = nn.Sequential(
         nn.LayerNorm(),
         nn.leaky_relu,
         nn.Dense(num_actions, kernel_init=sparse_init),
-        lambda x: (x, {}),
     ]
 )
 

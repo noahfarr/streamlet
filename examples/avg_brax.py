@@ -84,15 +84,12 @@ actor_network = nn.Sequential(
         nn.leaky_relu,
         L2Normalize(),
         nn.Dense(2 * action_dim, kernel_init=orthogonal()),
-        lambda out: (
-            distrax.Transformed(
-                distrax.MultivariateNormalDiag(
-                    loc=out[..., :action_dim],
-                    scale_diag=jnp.exp(jnp.clip(out[..., action_dim:], -20.0, 2.0)),
-                ),
-                distrax.Block(distrax.Tanh(), ndims=1),
+        lambda out: distrax.Transformed(
+            distrax.MultivariateNormalDiag(
+                loc=out[..., :action_dim],
+                scale_diag=jnp.exp(jnp.clip(out[..., action_dim:], -20.0, 2.0)),
             ),
-            {},
+            distrax.Block(distrax.Tanh(), ndims=1),
         ),
     ]
 )
@@ -117,7 +114,6 @@ critic_network = nn.Sequential(
         lambda features, action: jnp.concatenate([features, action], axis=-1),
         nn.Dense(1, kernel_init=orthogonal()),
         lambda q_value: jnp.squeeze(q_value, axis=-1),
-        lambda x: (x, {}),
     ]
 )
 

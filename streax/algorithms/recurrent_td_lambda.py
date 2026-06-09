@@ -1,11 +1,12 @@
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import Any, Callable
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
+import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -30,6 +31,7 @@ class RecurrentTDLambdaState:
     value_params: core.FrozenDict[str, Any]
     value_trace: PyTree
     value_optimizer_state: PyTree
+    aux_optimizer_state: PyTree
 
 
 @dataclass
@@ -39,10 +41,12 @@ class RecurrentTDLambda:
     env_params: EnvParams
     value_network: nn.Module
     value_optimizer: Optimizer
+    aux_loss: Callable = lambda params, transition: 0.0
+    aux_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
 
     def _apply(
         self, params: PyTree, carry: PyTree, timestep: Timestep
-    ) -> tuple[PyTree, Array, dict]:
+    ) -> tuple[PyTree, Array]:
         return self.value_network.apply(
             params,
             carry,
@@ -60,13 +64,12 @@ class RecurrentTDLambda:
             action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
         )
 
-        (next_carry, value, aux), value_vjp = jax.vjp(
+        (next_carry, value), value_vjp = jax.vjp(
             lambda p: self._apply(p, state.carry, state.timestep), state.value_params
         )
         (value_grads,) = value_vjp((
             jax.tree.map(jnp.zeros_like, next_carry),
             jnp.ones_like(value),
-            jax.tree.map(jnp.zeros_like, aux),
         ))
         value = value.squeeze(-1)
 
@@ -82,6 +85,7 @@ class RecurrentTDLambda:
             aux={
                 "value": value,
                 "value_grads": value_grads,
+                "carry": state.carry,
                 "next_carry": next_carry,
             },
         )
@@ -125,7 +129,7 @@ class RecurrentTDLambda:
         )
 
         def get_next_value(params):
-            _, next_value, _ = self._apply(params, next_carry, transition.second)
+            _, next_value = self._apply(params, next_carry, transition.second)
             return next_value.squeeze(-1)
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)
@@ -155,6 +159,12 @@ class RecurrentTDLambda:
             lambda p, u: p + u, state.value_params, value_updates
         )
 
+        _, aux_grads = jax.value_and_grad(self.aux_loss)(value_params, transition)
+        aux_updates, aux_optimizer_state = self.aux_optimizer.update(
+            aux_grads, state.aux_optimizer_state, value_params
+        )
+        value_params = optax.apply_updates(value_params, aux_updates)
+
         new_value_trace = jax.tree.map(
             lambda t: jnp.where(reset_trace, jnp.zeros_like(t), t),
             value_trace,
@@ -172,6 +182,7 @@ class RecurrentTDLambda:
             value_params=value_params,
             value_trace=new_value_trace,
             value_optimizer_state=value_optimizer_state,
+            aux_optimizer_state=aux_optimizer_state,
         )
 
     def init(self, key: Key) -> RecurrentTDLambdaState:
@@ -196,6 +207,7 @@ class RecurrentTDLambda:
         )
 
         value_optimizer_state = self.value_optimizer.init(value_params)
+        aux_optimizer_state = self.aux_optimizer.init(value_params)
 
         value_trace = jax.tree.map(jnp.zeros_like, value_params)
 
@@ -208,6 +220,7 @@ class RecurrentTDLambda:
             value_params=value_params,
             value_trace=value_trace,
             value_optimizer_state=value_optimizer_state,
+            aux_optimizer_state=aux_optimizer_state,
         )
 
     def warmup(

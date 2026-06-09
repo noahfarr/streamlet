@@ -64,7 +64,6 @@ def value_network():
             nn.LayerNorm(),
             nn.leaky_relu,
             nn.Dense(1, kernel_init=sparse_init),
-            lambda x: (x, {}),
         ]
     )
 

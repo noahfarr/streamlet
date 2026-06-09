@@ -1,11 +1,12 @@
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import Any, Callable
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
+import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -36,6 +37,7 @@ class TDLambdaState:
     value_params: core.FrozenDict[str, Any]
     value_trace: PyTree
     value_optimizer_state: PyTree
+    aux_optimizer_state: PyTree
 
 
 @dataclass
@@ -45,6 +47,8 @@ class TDLambda:
     env_params: EnvParams
     value_network: nn.Module
     value_optimizer: Optimizer
+    aux_loss: Callable = lambda params, transition: 0.0
+    aux_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
 
     def _step(self, state: TDLambdaState, key: Key) -> tuple[TDLambdaState, Transition]:
         action_space = self.env.action_space(self.env_params)
@@ -86,7 +90,7 @@ class TDLambda:
 
     def _update(self, state: TDLambdaState, transition: Transition) -> TDLambdaState:
         def get_value(params):
-            value, _ = self.value_network.apply(params, transition.first.obs)
+            value = self.value_network.apply(params, transition.first.obs)
             return value.squeeze(-1)
 
         value, value_vjp = jax.vjp(get_value, state.value_params)
@@ -100,7 +104,7 @@ class TDLambda:
         )
 
         def get_next_value(params):
-            value, _ = self.value_network.apply(params, transition.second.obs)
+            value = self.value_network.apply(params, transition.second.obs)
             return value.squeeze(-1)
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)
@@ -130,6 +134,12 @@ class TDLambda:
             lambda p, u: p + u, state.value_params, value_updates
         )
 
+        _, aux_grads = jax.value_and_grad(self.aux_loss)(value_params, transition)
+        aux_updates, aux_optimizer_state = self.aux_optimizer.update(
+            aux_grads, state.aux_optimizer_state, value_params
+        )
+        value_params = optax.apply_updates(value_params, aux_updates)
+
         new_value_trace = jax.tree.map(
             lambda t: jnp.where(reset_trace, jnp.zeros_like(t), t),
             value_trace,
@@ -147,6 +157,7 @@ class TDLambda:
             value_params=value_params,
             value_trace=new_value_trace,
             value_optimizer_state=value_optimizer_state,
+            aux_optimizer_state=aux_optimizer_state,
         )
 
     def init(self, key: Key) -> TDLambdaState:
@@ -160,6 +171,7 @@ class TDLambda:
         value_params = self.value_network.init(value_key, obs)
 
         value_optimizer_state = self.value_optimizer.init(value_params)
+        aux_optimizer_state = self.aux_optimizer.init(value_params)
 
         value_trace = jax.tree.map(jnp.zeros_like, value_params)
 
@@ -171,6 +183,7 @@ class TDLambda:
             value_params=value_params,
             value_trace=value_trace,
             value_optimizer_state=value_optimizer_state,
+            aux_optimizer_state=aux_optimizer_state,
         )
 
     def warmup(self, key: Key, state: TDLambdaState, num_steps: int) -> TDLambdaState:

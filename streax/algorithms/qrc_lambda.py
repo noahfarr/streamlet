@@ -6,6 +6,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
+import optax
 from flax import core, struct
 
 from streax.optimizers import Implicit, Optimizer
@@ -42,6 +43,8 @@ class QRCLambdaState:
     q_trace: PyTree
     h_trace: PyTree
     bias_trace: Array
+    aux_q_optimizer_state: PyTree
+    aux_h_optimizer_state: PyTree
 
 
 @dataclass
@@ -54,14 +57,17 @@ class QRCLambda:
     q_optimizer: Optimizer
     h_optimizer: Optimizer
     epsilon_schedule: Callable
+    aux_q_loss: Callable = lambda params, transition: 0.0
+    aux_h_loss: Callable = lambda params, transition: 0.0
+    aux_q_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
+    aux_h_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
 
     def _greedy_action(
         self, key: Key, state: QRCLambdaState
     ) -> tuple[QRCLambdaState, Array, dict]:
-        q_values, q_vjp, aux = jax.vjp(
+        q_values, q_vjp = jax.vjp(
             lambda params: self.q_network.apply(params, state.timestep.obs),
             state.q_params,
-            has_aux=True,
         )
         action = jnp.argmax(q_values, axis=-1)
         q_value = q_values[action]
@@ -70,7 +76,6 @@ class QRCLambda:
             jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
         )
         aux = {
-            **aux,
             "non_greedy": jnp.bool_(False),
             "q_value": q_value,
             "q_grads": q_grads,
@@ -96,10 +101,9 @@ class QRCLambda:
         random_key, _, sample_key = jax.random.split(key, 3)
         state, random_action, _ = self._random_action(random_key, state)
 
-        q_values, q_vjp, aux = jax.vjp(
+        q_values, q_vjp = jax.vjp(
             lambda params: self.q_network.apply(params, state.timestep.obs),
             state.q_params,
-            has_aux=True,
         )
         greedy_action = jnp.argmax(q_values, axis=-1)
 
@@ -113,7 +117,6 @@ class QRCLambda:
             jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
         )
         aux = {
-            **aux,
             "non_greedy": non_greedy,
             "q_value": q_value,
             "q_grads": q_grads,
@@ -167,7 +170,7 @@ class QRCLambda:
         q_grads = aux["q_grads"]
 
         def get_next_q_value(params):
-            q_values, _ = self.q_network.apply(params, transition.second.obs)
+            q_values = self.q_network.apply(params, transition.second.obs)
             return q_values.max(axis=-1)
 
         next_q_value, nv_vjp = jax.vjp(get_next_q_value, state.q_params)
@@ -186,7 +189,7 @@ class QRCLambda:
         )
 
         def compute_h(params):
-            h_values, _ = self.h_network.apply(params, transition.first.obs)
+            h_values = self.h_network.apply(params, transition.first.obs)
             h_value = h_values[action]
             return h_value
 
@@ -217,6 +220,12 @@ class QRCLambda:
             state.h_optimizer_state, h_grads_final
         )
         h_params = jax.tree.map(lambda p, u: p + u, state.h_params, h_param_updates)
+
+        _, aux_h_grads = jax.value_and_grad(self.aux_h_loss)(h_params, transition)
+        aux_h_updates, aux_h_optimizer_state = self.aux_h_optimizer.update(
+            aux_h_grads, state.aux_h_optimizer_state, h_params
+        )
+        h_params = optax.apply_updates(h_params, aux_h_updates)
 
         if isinstance(self.q_optimizer, Implicit):
             assert self.cfg.gradient_correction, (
@@ -264,6 +273,12 @@ class QRCLambda:
 
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_param_updates)
 
+        _, aux_q_grads = jax.value_and_grad(self.aux_q_loss)(q_params, transition)
+        aux_q_updates, aux_q_optimizer_state = self.aux_q_optimizer.update(
+            aux_q_grads, state.aux_q_optimizer_state, q_params
+        )
+        q_params = optax.apply_updates(q_params, aux_q_updates)
+
         new_q_trace = jax.tree.map(
             lambda t: jnp.where(reset_trace, jnp.zeros_like(t), t),
             q_trace,
@@ -296,6 +311,8 @@ class QRCLambda:
             q_trace=new_q_trace,
             h_trace=new_h_trace,
             bias_trace=new_bias_trace,
+            aux_q_optimizer_state=aux_q_optimizer_state,
+            aux_h_optimizer_state=aux_h_optimizer_state,
         )
 
     def init(self, key: Key) -> QRCLambdaState:
@@ -311,6 +328,8 @@ class QRCLambda:
         h_params = self.h_network.init(h_key, obs)
         q_optimizer_state = self.q_optimizer.init(q_params)
         h_optimizer_state = self.h_optimizer.init(h_params)
+        aux_q_optimizer_state = self.aux_q_optimizer.init(q_params)
+        aux_h_optimizer_state = self.aux_h_optimizer.init(h_params)
 
         q_trace = jax.tree.map(jnp.zeros_like, q_params)
         h_trace = jax.tree.map(jnp.zeros_like, h_params)
@@ -328,6 +347,8 @@ class QRCLambda:
             q_trace=q_trace,
             h_trace=h_trace,
             bias_trace=bias_trace,
+            aux_q_optimizer_state=aux_q_optimizer_state,
+            aux_h_optimizer_state=aux_h_optimizer_state,
         )
 
     def warmup(self, key: Key, state: QRCLambdaState, num_steps: int) -> QRCLambdaState:

@@ -6,6 +6,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
+import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -35,6 +36,8 @@ class RecurrentACLambdaState:
     critic_trace: PyTree
     actor_optimizer_state: PyTree
     critic_optimizer_state: PyTree
+    aux_actor_optimizer_state: PyTree
+    aux_critic_optimizer_state: PyTree
 
 
 @dataclass
@@ -46,10 +49,14 @@ class RecurrentACLambda:
     critic_network: nn.Module
     actor_optimizer: Optimizer
     critic_optimizer: Optimizer
+    aux_actor_loss: Callable = lambda params, transition: 0.0
+    aux_critic_loss: Callable = lambda params, transition: 0.0
+    aux_actor_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
+    aux_critic_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
 
     def _apply_actor(
         self, params: PyTree, carry: PyTree, timestep: Timestep
-    ) -> tuple[PyTree, Any, dict]:
+    ) -> tuple[PyTree, Any]:
         return self.actor_network.apply(
             params,
             carry,
@@ -61,7 +68,7 @@ class RecurrentACLambda:
 
     def _apply_critic(
         self, params: PyTree, carry: PyTree, timestep: Timestep
-    ) -> tuple[PyTree, Array, dict]:
+    ) -> tuple[PyTree, Array]:
         return self.critic_network.apply(
             params,
             carry,
@@ -75,7 +82,7 @@ class RecurrentACLambda:
         self, key: Key, state: RecurrentACLambdaState
     ) -> tuple[RecurrentACLambdaState, Array, dict]:
         def log_prob_and_entropy(params):
-            next_actor_carry, dist, aux = self._apply_actor(
+            next_actor_carry, dist = self._apply_actor(
                 params, state.actor_carry, state.timestep
             )
             action, _ = dist.sample_and_log_prob(seed=key)
@@ -84,9 +91,9 @@ class RecurrentACLambda:
                 next_actor_carry,
                 dist.log_prob(action),
                 dist.entropy(),
-            ), (action, aux)
+            ), action
 
-        (next_actor_carry, log_prob, entropy), actor_vjp, (action, aux) = jax.vjp(
+        (next_actor_carry, log_prob, entropy), actor_vjp, action = jax.vjp(
             log_prob_and_entropy, state.actor_params, has_aux=True
         )
         carry_bar = jax.tree.map(jnp.zeros_like, next_actor_carry)
@@ -97,7 +104,7 @@ class RecurrentACLambda:
             (carry_bar, jnp.zeros_like(log_prob), jnp.ones_like(entropy))
         )
 
-        (next_critic_carry, critic_value, critic_network_aux), critic_vjp = jax.vjp(
+        (next_critic_carry, critic_value), critic_vjp = jax.vjp(
             lambda params: self._apply_critic(
                 params, state.critic_carry, state.timestep
             ),
@@ -106,12 +113,10 @@ class RecurrentACLambda:
         (critic_grads,) = critic_vjp((
             jax.tree.map(jnp.zeros_like, next_critic_carry),
             jnp.ones_like(critic_value),
-            jax.tree.map(jnp.zeros_like, critic_network_aux),
         ))
         critic_value = critic_value.squeeze(-1)
 
         aux = {
-            **aux,
             "log_prob": log_prob,
             "entropy": entropy,
             "log_prob_grads": log_prob_grads,
@@ -126,15 +131,14 @@ class RecurrentACLambda:
     def _deterministic_action(
         self, key: Key, state: RecurrentACLambdaState
     ) -> tuple[RecurrentACLambdaState, Array, dict]:
-        next_actor_carry, dist, aux = self._apply_actor(
+        next_actor_carry, dist = self._apply_actor(
             state.actor_params, state.actor_carry, state.timestep
         )
         action = dist.mode()
-        next_critic_carry, _, _ = self._apply_critic(
+        next_critic_carry, _ = self._apply_critic(
             state.critic_params, state.critic_carry, state.timestep
         )
         aux = {
-            **aux,
             "log_prob": dist.log_prob(action),
             "entropy": dist.entropy(),
             "next_actor_carry": next_actor_carry,
@@ -214,7 +218,7 @@ class RecurrentACLambda:
         critic_trace = accumulate(state.critic_trace, critic_grads)
 
         def get_next_value(params):
-            _, next_value, _ = self._apply_critic(
+            _, next_value = self._apply_critic(
                 params, next_critic_carry, transition.second
             )
             return next_value.squeeze(-1)
@@ -262,6 +266,24 @@ class RecurrentACLambda:
             lambda p, u: p + u, state.critic_params, critic_updates
         )
 
+        _, aux_actor_grads = jax.value_and_grad(self.aux_actor_loss)(
+            actor_params, transition
+        )
+        aux_actor_updates, aux_actor_optimizer_state = self.aux_actor_optimizer.update(
+            aux_actor_grads, state.aux_actor_optimizer_state, actor_params
+        )
+        actor_params = optax.apply_updates(actor_params, aux_actor_updates)
+
+        _, aux_critic_grads = jax.value_and_grad(self.aux_critic_loss)(
+            critic_params, transition
+        )
+        aux_critic_updates, aux_critic_optimizer_state = (
+            self.aux_critic_optimizer.update(
+                aux_critic_grads, state.aux_critic_optimizer_state, critic_params
+            )
+        )
+        critic_params = optax.apply_updates(critic_params, aux_critic_updates)
+
         new_actor_trace = reset_eligibility(actor_trace)
         new_critic_trace = reset_eligibility(critic_trace)
 
@@ -284,6 +306,8 @@ class RecurrentACLambda:
             critic_trace=new_critic_trace,
             actor_optimizer_state=actor_optimizer_state,
             critic_optimizer_state=critic_optimizer_state,
+            aux_actor_optimizer_state=aux_actor_optimizer_state,
+            aux_critic_optimizer_state=aux_critic_optimizer_state,
         )
 
         return state.replace(**new_state)
@@ -322,6 +346,8 @@ class RecurrentACLambda:
 
         actor_optimizer_state = self.actor_optimizer.init(actor_params)
         critic_optimizer_state = self.critic_optimizer.init(critic_params)
+        aux_actor_optimizer_state = self.aux_actor_optimizer.init(actor_params)
+        aux_critic_optimizer_state = self.aux_critic_optimizer.init(critic_params)
 
         actor_trace = jax.tree.map(jnp.zeros_like, actor_params)
         critic_trace = jax.tree.map(jnp.zeros_like, critic_params)
@@ -339,6 +365,8 @@ class RecurrentACLambda:
             critic_trace=critic_trace,
             actor_optimizer_state=actor_optimizer_state,
             critic_optimizer_state=critic_optimizer_state,
+            aux_actor_optimizer_state=aux_actor_optimizer_state,
+            aux_critic_optimizer_state=aux_critic_optimizer_state,
         )
 
         return RecurrentACLambdaState(**state)

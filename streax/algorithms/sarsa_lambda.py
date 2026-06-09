@@ -5,6 +5,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
+import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -36,6 +37,7 @@ class SARSALambdaState:
     q_params: core.FrozenDict[str, Any]
     q_trace: PyTree
     q_optimizer_state: PyTree
+    aux_optimizer_state: PyTree
 
 
 @dataclass
@@ -46,6 +48,8 @@ class SARSALambda:
     q_network: nn.Module
     epsilon_schedule: Callable
     q_optimizer: Optimizer
+    aux_loss: Callable = lambda params, transition: 0.0
+    aux_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
 
     def _sample_action(
         self, key: Key, q_params: PyTree, obs: Array, step: Array
@@ -58,7 +62,7 @@ class SARSALambda:
             minval=0,
             maxval=action_space.n,
         )
-        q_values, _ = self.q_network.apply(q_params, obs)
+        q_values = self.q_network.apply(q_params, obs)
         greedy_action = jnp.argmax(q_values, axis=-1)
 
         epsilon = self.epsilon_schedule(step)
@@ -116,10 +120,9 @@ class SARSALambda:
         action = transition.second.action
         next_action = transition.aux["next_action"]
 
-        q_values, q_vjp, _ = jax.vjp(
+        q_values, q_vjp = jax.vjp(
             lambda params: self.q_network.apply(params, transition.first.obs),
             state.q_params,
-            has_aux=True,
         )
         q_value = q_values[action]
         num_actions = self.env.action_space(self.env_params).n
@@ -133,7 +136,7 @@ class SARSALambda:
         )
 
         def get_next_q_value(params):
-            q_values, _ = self.q_network.apply(params, transition.second.obs)
+            q_values = self.q_network.apply(params, transition.second.obs)
             return q_values[next_action]
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)
@@ -157,6 +160,12 @@ class SARSALambda:
 
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
+        _, aux_grads = jax.value_and_grad(self.aux_loss)(q_params, transition)
+        aux_updates, aux_optimizer_state = self.aux_optimizer.update(
+            aux_grads, state.aux_optimizer_state, q_params
+        )
+        q_params = optax.apply_updates(q_params, aux_updates)
+
         new_q_trace = jax.tree.map(
             lambda t: jnp.where(reset, jnp.zeros_like(t), t), q_trace
         )
@@ -173,6 +182,7 @@ class SARSALambda:
             q_params=q_params,
             q_trace=new_q_trace,
             q_optimizer_state=q_optimizer_state,
+            aux_optimizer_state=aux_optimizer_state,
         )
 
     def init(self, key: Key) -> SARSALambdaState:
@@ -186,6 +196,7 @@ class SARSALambda:
         q_params = self.q_network.init(q_key, obs)
 
         q_optimizer_state = self.q_optimizer.init(q_params)
+        aux_optimizer_state = self.aux_optimizer.init(q_params)
 
         q_trace = jax.tree.map(jnp.zeros_like, q_params)
 
@@ -200,6 +211,7 @@ class SARSALambda:
             q_params=q_params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
+            aux_optimizer_state=aux_optimizer_state,
         )
 
     def train(
@@ -218,7 +230,7 @@ class SARSALambda:
         obs, env_state = self.env.reset(reset_key, self.env_params)
 
         action_space = self.env.action_space(self.env_params)
-        first_action = jnp.argmax(self.q_network.apply(state.q_params, obs)[0], axis=-1)
+        first_action = jnp.argmax(self.q_network.apply(state.q_params, obs), axis=-1)
         state = state.replace(
             step=0,
             timestep=Timestep(
@@ -238,7 +250,7 @@ class SARSALambda:
                 key, state.env_state, state.next_action, self.env_params
             )
             next_action = jnp.argmax(
-                self.q_network.apply(state.q_params, next_obs)[0], axis=-1
+                self.q_network.apply(state.q_params, next_obs), axis=-1
             )
             return (
                 state.replace(

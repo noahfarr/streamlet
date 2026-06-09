@@ -76,7 +76,7 @@ actor_network = nn.Sequential(
     [
         network,
         nn.Dense(num_actions, kernel_init=sparse_init),
-        lambda logits: (distrax.Categorical(logits=logits), {}),
+        lambda logits: distrax.Categorical(logits=logits),
     ]
 )
 
@@ -84,7 +84,6 @@ critic_network = nn.Sequential(
     [
         network,
         nn.Dense(1, kernel_init=sparse_init),
-        lambda x: (x, {}),
     ]
 )
 

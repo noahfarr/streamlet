@@ -6,6 +6,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
+import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -30,6 +31,7 @@ class RecurrentQLambdaState:
     q_params: core.FrozenDict[str, Any]
     q_trace: PyTree
     q_optimizer_state: PyTree
+    aux_optimizer_state: PyTree
 
 
 @dataclass
@@ -40,10 +42,12 @@ class RecurrentQLambda:
     q_network: nn.Module
     epsilon_schedule: Callable
     q_optimizer: Optimizer
+    aux_loss: Callable = lambda params, transition: 0.0
+    aux_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
 
     def _apply(
         self, params: PyTree, carry: PyTree, timestep: Timestep
-    ) -> tuple[PyTree, Array, dict]:
+    ) -> tuple[PyTree, Array]:
         return self.q_network.apply(
             params,
             carry,
@@ -56,7 +60,7 @@ class RecurrentQLambda:
     def _greedy_action(
         self, key: Key, state: RecurrentQLambdaState
     ) -> tuple[RecurrentQLambdaState, Array, dict]:
-        (next_carry, q_values, network_aux), q_vjp = jax.vjp(
+        (next_carry, q_values), q_vjp = jax.vjp(
             lambda params: self._apply(params, state.carry, state.timestep),
             state.q_params,
         )
@@ -66,7 +70,6 @@ class RecurrentQLambda:
         (q_grads,) = q_vjp((
             jax.tree.map(jnp.zeros_like, next_carry),
             jax.nn.one_hot(action, num_actions, dtype=q_values.dtype),
-            jax.tree.map(jnp.zeros_like, network_aux),
         ))
         aux = {
             "non_greedy": jnp.bool_(False),
@@ -79,7 +82,7 @@ class RecurrentQLambda:
     def _random_action(
         self, key: Key, state: RecurrentQLambdaState
     ) -> tuple[RecurrentQLambdaState, Array, dict]:
-        next_carry, _, _ = self._apply(state.q_params, state.carry, state.timestep)
+        next_carry, _ = self._apply(state.q_params, state.carry, state.timestep)
         action_space = self.env.action_space(self.env_params)
         action = jax.random.randint(
             key,
@@ -102,7 +105,7 @@ class RecurrentQLambda:
             maxval=action_space.n,
         )
 
-        (next_carry, q_values, network_aux), q_vjp = jax.vjp(
+        (next_carry, q_values), q_vjp = jax.vjp(
             lambda params: self._apply(params, state.carry, state.timestep),
             state.q_params,
         )
@@ -117,7 +120,6 @@ class RecurrentQLambda:
         (q_grads,) = q_vjp((
             jax.tree.map(jnp.zeros_like, next_carry),
             jax.nn.one_hot(action, action_space.n, dtype=q_values.dtype),
-            jax.tree.map(jnp.zeros_like, network_aux),
         ))
         aux = {
             "non_greedy": non_greedy,
@@ -142,7 +144,7 @@ class RecurrentQLambda:
         transition = Transition(
             first=state.timestep,
             second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
-            aux=aux,
+            aux={**aux, "carry": state.carry},
         )
 
         return (
@@ -186,7 +188,7 @@ class RecurrentQLambda:
         )
 
         def get_next_q_value(params):
-            _, next_q_values, _ = self._apply(params, next_carry, transition.second)
+            _, next_q_values = self._apply(params, next_carry, transition.second)
             return next_q_values.max(axis=-1)
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)
@@ -214,6 +216,12 @@ class RecurrentQLambda:
 
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
+        _, aux_grads = jax.value_and_grad(self.aux_loss)(q_params, transition)
+        aux_updates, aux_optimizer_state = self.aux_optimizer.update(
+            aux_grads, state.aux_optimizer_state, q_params
+        )
+        q_params = optax.apply_updates(q_params, aux_updates)
+
         new_q_trace = jax.tree.map(
             lambda t: jnp.where(reset, jnp.zeros_like(t), t), q_trace
         )
@@ -230,6 +238,7 @@ class RecurrentQLambda:
             q_params=q_params,
             q_trace=new_q_trace,
             q_optimizer_state=q_optimizer_state,
+            aux_optimizer_state=aux_optimizer_state,
         )
 
     def init(self, key: Key) -> RecurrentQLambdaState:
@@ -255,6 +264,7 @@ class RecurrentQLambda:
         )
 
         q_optimizer_state = self.q_optimizer.init(q_params)
+        aux_optimizer_state = self.aux_optimizer.init(q_params)
 
         q_trace = jax.tree.map(jnp.zeros_like, q_params)
 
@@ -267,6 +277,7 @@ class RecurrentQLambda:
             q_params=q_params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
+            aux_optimizer_state=aux_optimizer_state,
         )
 
     def warmup(

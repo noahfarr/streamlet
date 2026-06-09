@@ -6,6 +6,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
+import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -33,6 +34,8 @@ class ACLambdaState:
     critic_trace: PyTree
     actor_optimizer_state: PyTree
     critic_optimizer_state: PyTree
+    aux_actor_optimizer_state: PyTree
+    aux_critic_optimizer_state: PyTree
 
 
 @dataclass
@@ -44,17 +47,21 @@ class ACLambda:
     critic_network: nn.Module
     actor_optimizer: Optimizer
     critic_optimizer: Optimizer
+    aux_actor_loss: Callable = lambda params, transition: 0.0
+    aux_critic_loss: Callable = lambda params, transition: 0.0
+    aux_actor_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
+    aux_critic_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
 
     def _stochastic_action(
         self, key: Key, state: ACLambdaState
     ) -> tuple[ACLambdaState, Array, dict]:
         def log_prob_and_entropy(params):
-            dist, aux = self.actor_network.apply(params, state.timestep.obs)
+            dist = self.actor_network.apply(params, state.timestep.obs)
             action, _ = dist.sample_and_log_prob(seed=key)
             action = jax.lax.stop_gradient(action)
-            return (dist.log_prob(action), dist.entropy()), (action, aux)
+            return (dist.log_prob(action), dist.entropy()), action
 
-        (log_prob, entropy), actor_vjp, (action, aux) = jax.vjp(
+        (log_prob, entropy), actor_vjp, action = jax.vjp(
             log_prob_and_entropy, state.actor_params, has_aux=True
         )
         (log_prob_grads,) = actor_vjp(
@@ -62,7 +69,6 @@ class ACLambda:
         )
         (entropy_grads,) = actor_vjp((jnp.zeros_like(log_prob), jnp.ones_like(entropy)))
         aux = {
-            **aux,
             "log_prob": log_prob,
             "entropy": entropy,
             "log_prob_grads": log_prob_grads,
@@ -73,9 +79,9 @@ class ACLambda:
     def _deterministic_action(
         self, key: Key, state: ACLambdaState
     ) -> tuple[ACLambdaState, Array, dict]:
-        dist, aux = self.actor_network.apply(state.actor_params, state.timestep.obs)
+        dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
         action = dist.mode()
-        aux = {**aux, "log_prob": dist.log_prob(action), "entropy": dist.entropy()}
+        aux = {"log_prob": dist.log_prob(action), "entropy": dist.entropy()}
         return state, action, aux
 
     def _step(
@@ -129,7 +135,7 @@ class ACLambda:
         entropy_grads = aux["entropy_grads"]
 
         def get_value(params):
-            critic_value, _ = self.critic_network.apply(params, transition.first.obs)
+            critic_value = self.critic_network.apply(params, transition.first.obs)
             return critic_value.squeeze(-1)
 
         critic_value, critic_vjp = jax.vjp(get_value, state.critic_params)
@@ -152,7 +158,7 @@ class ACLambda:
         critic_trace = accumulate(state.critic_trace, critic_grads)
 
         def get_next_value(params):
-            critic_value, _ = self.critic_network.apply(params, transition.second.obs)
+            critic_value = self.critic_network.apply(params, transition.second.obs)
             return critic_value.squeeze(-1)
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)
@@ -203,6 +209,24 @@ class ACLambda:
             lambda p, u: p + u, state.critic_params, critic_updates
         )
 
+        _, aux_actor_grads = jax.value_and_grad(self.aux_actor_loss)(
+            actor_params, transition
+        )
+        aux_actor_updates, aux_actor_optimizer_state = self.aux_actor_optimizer.update(
+            aux_actor_grads, state.aux_actor_optimizer_state, actor_params
+        )
+        actor_params = optax.apply_updates(actor_params, aux_actor_updates)
+
+        _, aux_critic_grads = jax.value_and_grad(self.aux_critic_loss)(
+            critic_params, transition
+        )
+        aux_critic_updates, aux_critic_optimizer_state = (
+            self.aux_critic_optimizer.update(
+                aux_critic_grads, state.aux_critic_optimizer_state, critic_params
+            )
+        )
+        critic_params = optax.apply_updates(critic_params, aux_critic_updates)
+
         new_actor_trace = reset_eligibility(actor_trace)
         new_critic_trace = reset_eligibility(critic_trace)
 
@@ -225,6 +249,8 @@ class ACLambda:
             critic_trace=new_critic_trace,
             actor_optimizer_state=actor_optimizer_state,
             critic_optimizer_state=critic_optimizer_state,
+            aux_actor_optimizer_state=aux_actor_optimizer_state,
+            aux_critic_optimizer_state=aux_critic_optimizer_state,
         )
 
         return state.replace(**new_state)
@@ -242,6 +268,8 @@ class ACLambda:
 
         actor_optimizer_state = self.actor_optimizer.init(actor_params)
         critic_optimizer_state = self.critic_optimizer.init(critic_params)
+        aux_actor_optimizer_state = self.aux_actor_optimizer.init(actor_params)
+        aux_critic_optimizer_state = self.aux_critic_optimizer.init(critic_params)
 
         actor_trace = jax.tree.map(jnp.zeros_like, actor_params)
         critic_trace = jax.tree.map(jnp.zeros_like, critic_params)
@@ -257,6 +285,8 @@ class ACLambda:
             critic_trace=critic_trace,
             actor_optimizer_state=actor_optimizer_state,
             critic_optimizer_state=critic_optimizer_state,
+            aux_actor_optimizer_state=aux_actor_optimizer_state,
+            aux_critic_optimizer_state=aux_critic_optimizer_state,
         )
 
         return ACLambdaState(**state)
