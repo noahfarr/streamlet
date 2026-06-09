@@ -25,7 +25,7 @@ class DashboardLogger:
         total_timesteps=0,
         refresh_per_second=10,
         summary=None,
-        title="Streax",
+        title=None,
         **kwargs,
     ):
         self.summary = summary or {}

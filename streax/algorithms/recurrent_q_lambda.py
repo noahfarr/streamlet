@@ -43,7 +43,7 @@ class RecurrentQLambda:
 
     def _apply(
         self, params: PyTree, carry: PyTree, timestep: Timestep
-    ) -> tuple[PyTree, Array]:
+    ) -> tuple[PyTree, Array, dict]:
         return self.q_network.apply(
             params,
             carry,
@@ -61,21 +61,22 @@ class RecurrentQLambda:
     def _value_and_grad(
         self, params: PyTree, carry: PyTree, timestep: Timestep, action: Array
     ) -> tuple[Array, Array, PyTree]:
-        (carry_next, q_values), q_vjp = jax.vjp(
+        (carry_next, q_values, aux), q_vjp = jax.vjp(
             lambda p: self._apply(p, carry, timestep), params
         )
         q_value = q_values[action]
         num_actions = self.env.action_space(self.env_params).n
-        carry_bar = jax.tree.map(jnp.zeros_like, carry_next)
-        (q_grads,) = q_vjp(
-            (carry_bar, jax.nn.one_hot(action, num_actions, dtype=q_values.dtype))
-        )
+        (q_grads,) = q_vjp((
+            jax.tree.map(jnp.zeros_like, carry_next),
+            jax.nn.one_hot(action, num_actions, dtype=q_values.dtype),
+            jax.tree.map(jnp.zeros_like, aux),
+        ))
         return carry_next, q_value, q_grads
 
     def _greedy_action(
         self, key: Key, state: RecurrentQLambdaState
     ) -> tuple[RecurrentQLambdaState, Array, dict]:
-        carry_next, q_values = self._apply(state.q_params, state.carry, state.timestep)
+        carry_next, q_values, _ = self._apply(state.q_params, state.carry, state.timestep)
         action = jnp.argmax(q_values, axis=-1)
         _, q_value, q_grads = self._value_and_grad(
             state.q_params, state.carry, state.timestep, action
@@ -91,7 +92,7 @@ class RecurrentQLambda:
     def _random_action(
         self, key: Key, state: RecurrentQLambdaState
     ) -> tuple[RecurrentQLambdaState, Array, dict]:
-        carry_next, _ = self._apply(state.q_params, state.carry, state.timestep)
+        carry_next, _, _ = self._apply(state.q_params, state.carry, state.timestep)
         action_space = self.env.action_space(self.env_params)
         action = jax.random.randint(
             key,
@@ -114,7 +115,7 @@ class RecurrentQLambda:
             maxval=action_space.n,
         )
 
-        carry_next, q_values = self._apply(state.q_params, state.carry, state.timestep)
+        carry_next, q_values, _ = self._apply(state.q_params, state.carry, state.timestep)
         greedy_action = jnp.argmax(q_values, axis=-1)
 
         epsilon = self.epsilon_schedule(state.step)
@@ -192,7 +193,7 @@ class RecurrentQLambda:
         )
 
         def bootstrap_value(params):
-            _, next_q_values = self._apply(params, carry_next, transition.second)
+            _, next_q_values, _ = self._apply(params, carry_next, transition.second)
             return next_q_values.max(axis=-1)
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)

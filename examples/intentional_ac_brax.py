@@ -80,9 +80,12 @@ actor_network = nn.Sequential(
     [
         network,
         nn.Dense(2 * action_dim, kernel_init=sparse_init),
-        lambda out: distrax.MultivariateNormalDiag(
-            loc=out[..., :action_dim],
-            scale_diag=nn.softplus(out[..., action_dim:]),
+        lambda out: (
+            distrax.MultivariateNormalDiag(
+                loc=out[..., :action_dim],
+                scale_diag=nn.softplus(out[..., action_dim:]),
+            ),
+            {},
         ),
     ]
 )
@@ -91,6 +94,7 @@ critic_network = nn.Sequential(
     [
         network,
         nn.Dense(1, kernel_init=sparse_init),
+        lambda x: (x, {}),
     ]
 )
 

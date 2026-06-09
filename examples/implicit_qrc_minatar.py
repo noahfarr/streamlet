@@ -78,12 +78,14 @@ q_network = nn.Sequential(
     [
         backbone,
         nn.Dense(num_actions, kernel_init=sparse_init),
+        lambda x: (x, {}),
     ]
 )
 h_network = nn.Sequential(
     [
         backbone,
         nn.Dense(num_actions, kernel_init=sparse_init),
+        lambda x: (x, {}),
     ]
 )
 

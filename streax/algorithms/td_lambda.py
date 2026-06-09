@@ -86,7 +86,8 @@ class TDLambda:
 
     def _update(self, state: TDLambdaState, transition: Transition) -> TDLambdaState:
         def value_fn(params):
-            return self.value_network.apply(params, transition.first.obs).squeeze(-1)
+            value, _ = self.value_network.apply(params, transition.first.obs)
+            return value.squeeze(-1)
 
         value, value_vjp = jax.vjp(value_fn, state.value_params)
         (value_grads,) = value_vjp(jnp.ones_like(value))
@@ -106,7 +107,8 @@ class TDLambda:
         )
 
         def bootstrap_value(params):
-            return self.value_network.apply(params, transition.second.obs).squeeze(-1)
+            value, _ = self.value_network.apply(params, transition.second.obs)
+            return value.squeeze(-1)
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)
         next_value, curvature = self.value_optimizer.bootstrap(

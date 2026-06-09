@@ -39,6 +39,7 @@ class QLambda:
     q_network: nn.Module
     epsilon_schedule: Callable
     q_optimizer: Optimizer
+    aux_loss: Callable | None = None
 
     def _greedy_action(
         self, key: Key, state: QLambdaState
@@ -50,9 +51,7 @@ class QLambda:
         action = jnp.argmax(q_values, axis=-1)
         q_value = q_values[action]
         num_actions = self.env.action_space(self.env_params).n
-        (q_grads,) = q_vjp(
-            jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
-        )
+        (q_grads,) = q_vjp(jax.nn.one_hot(action, num_actions, dtype=q_values.dtype))
         aux = {
             "non_greedy": jnp.bool_(False),
             "q_value": q_value,
@@ -91,10 +90,12 @@ class QLambda:
         non_greedy = is_random & (random_action != greedy_action)
         q_value = q_values[action]
         num_actions = self.env.action_space(self.env_params).n
-        (q_grads,) = q_vjp(
-            jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
-        )
-        aux = {"non_greedy": non_greedy, "q_value": q_value, "q_grads": q_grads}
+        (q_grads,) = q_vjp(jax.nn.one_hot(action, num_actions, dtype=q_values.dtype))
+        aux = {
+            "non_greedy": non_greedy,
+            "q_value": q_value,
+            "q_grads": q_grads,
+        }
         return state, action, aux
 
     def _step(
@@ -149,9 +150,7 @@ class QLambda:
         reset = transition.second.done | non_greedy
         discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
 
-        q_trace = jax.tree.map(
-            lambda t, g: discount * t + g, state.q_trace, q_grads
-        )
+        q_trace = jax.tree.map(lambda t, g: discount * t + g, state.q_trace, q_grads)
 
         def bootstrap_value(params):
             return self.q_network.apply(params, transition.second.obs).max(axis=-1)
@@ -181,20 +180,25 @@ class QLambda:
 
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
-        new_q_trace = jax.tree.map(
+        if self.aux_loss is not None:
+            _, aux_grad = jax.value_and_grad(self.aux_loss)(q_params, transition)
+            q_params = jax.tree.map(lambda p, g: p - 0.001 * g, q_params, aux_grad)
+
+        q_trace = jax.tree.map(
             lambda t: jnp.where(reset, jnp.zeros_like(t), t), q_trace
         )
 
-        log_dict = {
-            "q_network/q_value": q_value.mean(),
-            "q_network/td_error": td_error.mean(),
-            "training/epsilon": self.epsilon_schedule(state.step),
-        }
-        lox.log(log_dict)
+        lox.log(
+            {
+                "q_network/q_value": q_value.mean(),
+                "q_network/td_error": td_error.mean(),
+                "training/epsilon": self.epsilon_schedule(state.step),
+            }
+        )
 
         new_state = dict(
             q_params=q_params,
-            q_trace=new_q_trace,
+            q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
         )
 

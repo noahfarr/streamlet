@@ -31,7 +31,7 @@ craftax   = ["craftax"]
 
 
 [tool.uv.sources]
-lox = { git = "https://github.com/huterguier/lox" }
+lox = { git = "https://github.com/huterguier/lox", branch = "dev" }
 slurmpilot = { git = "ssh://git@github.com/noahfarr/slurmpilot.git", branch = "feat/spignore" }
 
 [dependency-groups]

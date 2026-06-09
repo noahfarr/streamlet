@@ -56,12 +56,12 @@ class ACLambda:
         self, key: Key, state: ACLambdaState
     ) -> tuple[ACLambdaState, Array, dict]:
         def actor_outputs(params):
-            dist = self.actor_network.apply(params, state.timestep.obs)
+            dist, aux = self.actor_network.apply(params, state.timestep.obs)
             action, _ = dist.sample_and_log_prob(seed=key)
             action = jax.lax.stop_gradient(action)
-            return (dist.log_prob(action), dist.entropy()), action
+            return (dist.log_prob(action), dist.entropy()), (action, aux)
 
-        (log_prob, entropy), actor_vjp, action = jax.vjp(
+        (log_prob, entropy), actor_vjp, (action, aux) = jax.vjp(
             actor_outputs, state.actor_params, has_aux=True
         )
         one = jnp.ones_like(log_prob)
@@ -69,6 +69,7 @@ class ACLambda:
         (log_prob_grads,) = actor_vjp((one, zero))
         (entropy_grads,) = actor_vjp((zero, one))
         aux = {
+            **aux,
             "log_prob": log_prob,
             "entropy": entropy,
             "log_prob_grads": log_prob_grads,
@@ -79,9 +80,9 @@ class ACLambda:
     def _deterministic_action(
         self, key: Key, state: ACLambdaState
     ) -> tuple[ACLambdaState, Array, dict]:
-        dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
+        dist, aux = self.actor_network.apply(state.actor_params, state.timestep.obs)
         action = dist.mode()
-        aux = {"log_prob": dist.log_prob(action), "entropy": dist.entropy()}
+        aux = {**aux, "log_prob": dist.log_prob(action), "entropy": dist.entropy()}
         return state, action, aux
 
     def _step(
@@ -135,7 +136,8 @@ class ACLambda:
         entropy_grads = aux["entropy_grads"]
 
         def value_fn(params):
-            return self.critic_network.apply(params, transition.first.obs).squeeze(-1)
+            critic_value, _ = self.critic_network.apply(params, transition.first.obs)
+            return critic_value.squeeze(-1)
 
         critic_value, critic_vjp = jax.vjp(value_fn, state.critic_params)
         (critic_grads,) = critic_vjp(jnp.ones_like(critic_value))
@@ -164,7 +166,8 @@ class ACLambda:
         critic_trace = accumulate(state.critic_trace, critic_grads)
 
         def bootstrap_value(params):
-            return self.critic_network.apply(params, transition.second.obs).squeeze(-1)
+            critic_value, _ = self.critic_network.apply(params, transition.second.obs)
+            return critic_value.squeeze(-1)
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)
         next_value, curvature = self.critic_optimizer.bootstrap(

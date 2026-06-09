@@ -49,7 +49,7 @@ class RecurrentACLambda:
 
     def _apply_actor(
         self, params: PyTree, carry: PyTree, timestep: Timestep
-    ) -> tuple[PyTree, Any]:
+    ) -> tuple[PyTree, Any, dict]:
         return self.actor_network.apply(
             params,
             carry,
@@ -61,7 +61,7 @@ class RecurrentACLambda:
 
     def _apply_critic(
         self, params: PyTree, carry: PyTree, timestep: Timestep
-    ) -> tuple[PyTree, Array]:
+    ) -> tuple[PyTree, Array, dict]:
         return self.critic_network.apply(
             params,
             carry,
@@ -79,26 +79,33 @@ class RecurrentACLambda:
     def _critic_value_and_grad(
         self, state: RecurrentACLambdaState
     ) -> tuple[PyTree, Array, PyTree]:
-        (critic_carry_next, value), critic_vjp = jax.vjp(
+        (critic_carry_next, value, aux), critic_vjp = jax.vjp(
             lambda p: self._apply_critic(p, state.critic_carry, state.timestep),
             state.critic_params,
         )
-        carry_bar = jax.tree.map(jnp.zeros_like, critic_carry_next)
-        (critic_grads,) = critic_vjp((carry_bar, jnp.ones_like(value)))
+        (critic_grads,) = critic_vjp((
+            jax.tree.map(jnp.zeros_like, critic_carry_next),
+            jnp.ones_like(value),
+            jax.tree.map(jnp.zeros_like, aux),
+        ))
         return critic_carry_next, value.squeeze(-1), critic_grads
 
     def _stochastic_action(
         self, key: Key, state: RecurrentACLambdaState
     ) -> tuple[RecurrentACLambdaState, Array, dict]:
         def actor_outputs(params):
-            actor_carry_next, dist = self._apply_actor(
+            actor_carry_next, dist, aux = self._apply_actor(
                 params, state.actor_carry, state.timestep
             )
             action, _ = dist.sample_and_log_prob(seed=key)
             action = jax.lax.stop_gradient(action)
-            return (actor_carry_next, dist.log_prob(action), dist.entropy()), action
+            return (
+                actor_carry_next,
+                dist.log_prob(action),
+                dist.entropy(),
+            ), (action, aux)
 
-        (actor_carry_next, log_prob, entropy), actor_vjp, action = jax.vjp(
+        (actor_carry_next, log_prob, entropy), actor_vjp, (action, aux) = jax.vjp(
             actor_outputs, state.actor_params, has_aux=True
         )
         carry_bar = jax.tree.map(jnp.zeros_like, actor_carry_next)
@@ -112,6 +119,7 @@ class RecurrentACLambda:
         )
 
         aux = {
+            **aux,
             "log_prob": log_prob,
             "entropy": entropy,
             "log_prob_grads": log_prob_grads,
@@ -126,14 +134,15 @@ class RecurrentACLambda:
     def _deterministic_action(
         self, key: Key, state: RecurrentACLambdaState
     ) -> tuple[RecurrentACLambdaState, Array, dict]:
-        actor_carry_next, dist = self._apply_actor(
+        actor_carry_next, dist, aux = self._apply_actor(
             state.actor_params, state.actor_carry, state.timestep
         )
         action = dist.mode()
-        critic_carry_next, _ = self._apply_critic(
+        critic_carry_next, _, _ = self._apply_critic(
             state.critic_params, state.critic_carry, state.timestep
         )
         aux = {
+            **aux,
             "log_prob": dist.log_prob(action),
             "entropy": dist.entropy(),
             "actor_carry_next": actor_carry_next,
@@ -213,7 +222,7 @@ class RecurrentACLambda:
         critic_trace = accumulate(state.critic_trace, critic_grads)
 
         def bootstrap_value(params):
-            _, next_value = self._apply_critic(
+            _, next_value, _ = self._apply_critic(
                 params, critic_carry_next, transition.second
             )
             return next_value.squeeze(-1)

@@ -42,7 +42,7 @@ class RecurrentTDLambda:
 
     def _apply(
         self, params: PyTree, carry: PyTree, timestep: Timestep
-    ) -> tuple[PyTree, Array]:
+    ) -> tuple[PyTree, Array, dict]:
         return self.value_network.apply(
             params,
             carry,
@@ -65,11 +65,14 @@ class RecurrentTDLambda:
             action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
         )
 
-        (carry_next, value), value_vjp = jax.vjp(
+        (carry_next, value, aux), value_vjp = jax.vjp(
             lambda p: self._apply(p, state.carry, state.timestep), state.value_params
         )
-        carry_bar = jax.tree.map(jnp.zeros_like, carry_next)
-        (value_grads,) = value_vjp((carry_bar, jnp.ones_like(value)))
+        (value_grads,) = value_vjp((
+            jax.tree.map(jnp.zeros_like, carry_next),
+            jnp.ones_like(value),
+            jax.tree.map(jnp.zeros_like, aux),
+        ))
         value = value.squeeze(-1)
 
         next_obs, env_state, reward, done, info = self.env.step(
@@ -127,7 +130,7 @@ class RecurrentTDLambda:
         )
 
         def bootstrap_value(params):
-            _, next_value = self._apply(params, carry_next, transition.second)
+            _, next_value, _ = self._apply(params, carry_next, transition.second)
             return next_value.squeeze(-1)
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)

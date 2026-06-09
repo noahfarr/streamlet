@@ -55,7 +55,7 @@ class AVGLambda:
     def _sample_action(
         self, params: PyTree, obs: Array, key: Key
     ) -> tuple[Array, Array]:
-        dist = self.actor_network.apply(params, obs)
+        dist, _ = self.actor_network.apply(params, obs)
         return dist.sample_and_log_prob(seed=key)
 
     def _stochastic_action(
@@ -66,7 +66,7 @@ class AVGLambda:
     def _deterministic_action(
         self, key: Key, state: AVGLambdaState
     ) -> tuple[Array, Array]:
-        dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
+        dist, _ = self.actor_network.apply(state.actor_params, state.timestep.obs)
         action = dist.bijector.forward(dist.distribution.mode())
         log_prob = dist.log_prob(action)
         return action, log_prob
@@ -121,13 +121,13 @@ class AVGLambda:
         done = jnp.asarray(done, dtype=jnp.bool_)
         not_done = 1.0 - done.astype(jnp.float32)
 
-        next_dist = self.actor_network.apply(
+        next_dist, _ = self.actor_network.apply(
             jax.lax.stop_gradient(state.actor_params), next_obs
         )
         next_action, next_log_prob = next_dist.sample_and_log_prob(
             seed=next_action_key
         )
-        next_q = self.critic_network.apply(
+        next_q, _ = self.critic_network.apply(
             jax.lax.stop_gradient(state.critic_params), next_obs, next_action
         )
         target_v = next_q - self.cfg.alpha * next_log_prob
@@ -137,7 +137,8 @@ class AVGLambda:
         sigma = td_scaler.sigma()
 
         def compute_q_value(params: PyTree, obs: Array, action: Array) -> Array:
-            return self.critic_network.apply(params, obs, action)
+            q, _ = self.critic_network.apply(params, obs, action)
+            return q
 
         q, q_grads = jax.value_and_grad(compute_q_value)(
             state.critic_params, state.timestep.obs, action
@@ -145,9 +146,9 @@ class AVGLambda:
         td_error = (reward + not_done * self.cfg.gamma * target_v - q) / sigma
 
         def compute_actor_loss(actor_params: PyTree, obs: Array, key: Key) -> Array:
-            dist = self.actor_network.apply(actor_params, obs)
+            dist, _ = self.actor_network.apply(actor_params, obs)
             reparam_action, reparam_log_prob = dist.sample_and_log_prob(seed=key)
-            reparam_q = self.critic_network.apply(
+            reparam_q, _ = self.critic_network.apply(
                 jax.lax.stop_gradient(state.critic_params), obs, reparam_action
             )
             return self.cfg.alpha * reparam_log_prob - reparam_q

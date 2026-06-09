@@ -58,9 +58,10 @@ class QRCLambda:
     def _greedy_action(
         self, key: Key, state: QRCLambdaState
     ) -> tuple[QRCLambdaState, Array, dict]:
-        q_values, q_vjp = jax.vjp(
+        q_values, q_vjp, aux = jax.vjp(
             lambda params: self.q_network.apply(params, state.timestep.obs),
             state.q_params,
+            has_aux=True,
         )
         action = jnp.argmax(q_values, axis=-1)
         q_value = q_values[action]
@@ -69,6 +70,7 @@ class QRCLambda:
             jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
         )
         aux = {
+            **aux,
             "non_greedy": jnp.bool_(False),
             "q_value": q_value,
             "q_grads": q_grads,
@@ -94,9 +96,10 @@ class QRCLambda:
         random_key, _, sample_key = jax.random.split(key, 3)
         state, random_action, _ = self._random_action(random_key, state)
 
-        q_values, q_vjp = jax.vjp(
+        q_values, q_vjp, aux = jax.vjp(
             lambda params: self.q_network.apply(params, state.timestep.obs),
             state.q_params,
+            has_aux=True,
         )
         greedy_action = jnp.argmax(q_values, axis=-1)
 
@@ -109,7 +112,12 @@ class QRCLambda:
         (q_grads,) = q_vjp(
             jax.nn.one_hot(action, num_actions, dtype=q_values.dtype)
         )
-        aux = {"non_greedy": non_greedy, "q_value": q_value, "q_grads": q_grads}
+        aux = {
+            **aux,
+            "non_greedy": non_greedy,
+            "q_value": q_value,
+            "q_grads": q_grads,
+        }
         return state, action, aux
 
     def _step(
@@ -159,7 +167,8 @@ class QRCLambda:
         q_grads = aux["q_grads"]
 
         def next_value_fn(params):
-            return self.q_network.apply(params, transition.second.obs).max(axis=-1)
+            q_values, _ = self.q_network.apply(params, transition.second.obs)
+            return q_values.max(axis=-1)
 
         next_value, nv_vjp = jax.vjp(next_value_fn, state.q_params)
         (next_value_grads,) = nv_vjp(jnp.ones_like(next_value))
@@ -177,7 +186,7 @@ class QRCLambda:
         )
 
         def compute_h(params):
-            h_values = self.h_network.apply(params, transition.first.obs)
+            h_values, _ = self.h_network.apply(params, transition.first.obs)
             h_value = h_values[action]
             return h_value
 

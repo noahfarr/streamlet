@@ -58,7 +58,7 @@ class SARSALambda:
             minval=0,
             maxval=action_space.n,
         )
-        q_values = self.q_network.apply(q_params, obs)
+        q_values, _ = self.q_network.apply(q_params, obs)
         greedy_action = jnp.argmax(q_values, axis=-1)
 
         epsilon = self.epsilon_schedule(step)
@@ -116,9 +116,10 @@ class SARSALambda:
         action = transition.second.action
         next_action = transition.aux["next_action"]
 
-        q_values, q_vjp = jax.vjp(
+        q_values, q_vjp, _ = jax.vjp(
             lambda params: self.q_network.apply(params, transition.first.obs),
             state.q_params,
+            has_aux=True,
         )
         q_value = q_values[action]
         num_actions = self.env.action_space(self.env_params).n
@@ -132,7 +133,8 @@ class SARSALambda:
         )
 
         def bootstrap_value(params):
-            return self.q_network.apply(params, transition.second.obs)[next_action]
+            q_values, _ = self.q_network.apply(params, transition.second.obs)
+            return q_values[next_action]
 
         not_done = 1.0 - transition.second.done.astype(jnp.float32)
         next_value, curvature = self.q_optimizer.bootstrap(
@@ -216,7 +218,7 @@ class SARSALambda:
         obs, env_state = self.env.reset(reset_key, self.env_params)
 
         action_space = self.env.action_space(self.env_params)
-        first_action = jnp.argmax(self.q_network.apply(state.q_params, obs), axis=-1)
+        first_action = jnp.argmax(self.q_network.apply(state.q_params, obs)[0], axis=-1)
         state = state.replace(
             step=0,
             timestep=Timestep(
@@ -236,7 +238,7 @@ class SARSALambda:
                 key, state.env_state, state.next_action, self.env_params
             )
             next_action = jnp.argmax(
-                self.q_network.apply(state.q_params, next_obs), axis=-1
+                self.q_network.apply(state.q_params, next_obs)[0], axis=-1
             )
             return (
                 state.replace(
