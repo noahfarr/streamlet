@@ -47,8 +47,6 @@ class QRCLambda:
     epsilon_schedule: Callable
     aux_q_loss: Callable | None = None
     aux_h_loss: Callable | None = None
-    aux_q_coefficient: float = 1e-3
-    aux_h_coefficient: float = 1e-3
 
     def _env_step(
         self, state: QRCLambdaState, key: Key, epsilon: Array
@@ -63,8 +61,10 @@ class QRCLambda:
             maxval=action_space.n,
         )
 
-        q_values, q_vjp = jax.vjp(
-            lambda params: self.q_network.apply(params, state.timestep.obs),
+        (q_values, intermediates), q_vjp = jax.vjp(
+            lambda params: self.q_network.apply(
+                params, state.timestep.obs, mutable=["intermediates"]
+            ),
             state.q_params,
         )
         greedy_action = jnp.argmax(q_values, axis=-1)
@@ -75,7 +75,10 @@ class QRCLambda:
 
         q_value = q_values[action]
         (q_grads,) = q_vjp(
-            jax.nn.one_hot(action, action_space.n, dtype=q_values.dtype)
+            (
+                jax.nn.one_hot(action, action_space.n, dtype=q_values.dtype),
+                jax.tree.map(jnp.zeros_like, intermediates),
+            )
         )
 
         next_obs, env_state, reward, done, info = self.env.step(
@@ -90,7 +93,10 @@ class QRCLambda:
             aux={
                 "non_greedy": non_greedy,
                 "q_value": q_value,
+                "q_values": q_values,
                 "q_grads": q_grads,
+                "intermediates": intermediates,
+                "q_vjp": q_vjp,
             },
         )
 
@@ -114,7 +120,10 @@ class QRCLambda:
         action = transition.second.action
         non_greedy = transition.aux["non_greedy"]
         q_value = transition.aux["q_value"]
+        q_values = transition.aux["q_values"]
         q_grads = transition.aux["q_grads"]
+        intermediates = transition.aux["intermediates"]
+        q_vjp = transition.aux["q_vjp"]
 
         next_q_value, nv_vjp = jax.vjp(
             lambda params: self.q_network.apply(params, transition.second.obs).max(
@@ -174,7 +183,7 @@ class QRCLambda:
         if self.aux_h_loss is not None:
             aux_h_grads = jax.grad(self.aux_h_loss)(h_params, transition)
             h_params = jax.tree.map(
-                lambda p, g: p - self.aux_h_coefficient * g, h_params, aux_h_grads
+                lambda p, g: p - g, h_params, aux_h_grads
             )
 
         if isinstance(self.q_optimizer, Implicit):
@@ -223,9 +232,20 @@ class QRCLambda:
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_param_updates)
 
         if self.aux_q_loss is not None:
-            aux_q_grads = jax.grad(self.aux_q_loss)(q_params, transition)
+            _, next_intermediates = self.q_network.apply(
+                state.q_params, transition.second.obs, mutable=["intermediates"]
+            )
+            transition = transition.replace(
+                aux={**transition.aux, "next_intermediates": next_intermediates}
+            )
+            cotangents = jax.grad(
+                lambda i: self.aux_q_loss(
+                    transition.replace(aux={**transition.aux, "intermediates": i})
+                )
+            )(intermediates)
+            (aux_q_grads,) = q_vjp((jnp.zeros_like(q_values), cotangents))
             q_params = jax.tree.map(
-                lambda p, g: p - self.aux_q_coefficient * g, q_params, aux_q_grads
+                lambda p, g: p - g, q_params, aux_q_grads
             )
 
         target_q_value = q_value + td_error

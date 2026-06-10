@@ -9,6 +9,7 @@ from flax import core, struct
 
 from streax.optimizers import Optimizer
 from streax.utils import Timestep, Transition, canonicalize_dtype
+from streax.utils.axes import remove_feature_axis
 from streax.utils.typing import Array, Environment, EnvParams, EnvState, Key, PyTree
 
 
@@ -44,8 +45,6 @@ class ACLambda:
     critic_optimizer: Optimizer
     aux_actor_loss: Callable | None = None
     aux_critic_loss: Callable | None = None
-    aux_actor_coefficient: float = 1e-3
-    aux_critic_coefficient: float = 1e-3
 
     def _env_step(
         self, state: ACLambdaState, key: Key, temperature: Array
@@ -53,19 +52,31 @@ class ACLambda:
         action_key, step_key = jax.random.split(key)
 
         def log_prob_and_entropy(params):
-            dist = self.actor_network.apply(params, state.timestep.obs)
+            dist, intermediates = self.actor_network.apply(
+                params, state.timestep.obs, mutable=["intermediates"]
+            )
             action, _ = dist.sample_and_log_prob(seed=action_key)
             action = jnp.where(temperature == 0.0, dist.mode(), action)
             action = jax.lax.stop_gradient(action)
-            return (dist.log_prob(action), dist.entropy()), action
+            return (dist.log_prob(action), dist.entropy(), intermediates), action
 
-        (log_prob, entropy), actor_vjp, action = jax.vjp(
+        (log_prob, entropy, intermediates), actor_vjp, action = jax.vjp(
             log_prob_and_entropy, state.actor_params, has_aux=True
         )
         (log_prob_grads,) = actor_vjp(
-            (jnp.ones_like(log_prob), jnp.zeros_like(entropy))
+            (
+                jnp.ones_like(log_prob),
+                jnp.zeros_like(entropy),
+                jax.tree.map(jnp.zeros_like, intermediates),
+            )
         )
-        (entropy_grads,) = actor_vjp((jnp.zeros_like(log_prob), jnp.ones_like(entropy)))
+        (entropy_grads,) = actor_vjp(
+            (
+                jnp.zeros_like(log_prob),
+                jnp.ones_like(entropy),
+                jax.tree.map(jnp.zeros_like, intermediates),
+            )
+        )
 
         next_obs, env_state, reward, done, info = self.env.step(
             step_key, state.env_state, action, self.env_params
@@ -81,6 +92,8 @@ class ACLambda:
                 "entropy": entropy,
                 "log_prob_grads": log_prob_grads,
                 "entropy_grads": entropy_grads,
+                "intermediates": intermediates,
+                "actor_vjp": actor_vjp,
             },
         )
 
@@ -103,16 +116,22 @@ class ACLambda:
         state: ACLambdaState,
         transition: Transition,
     ) -> ACLambdaState:
+        log_prob = transition.aux["log_prob"]
+        entropy = transition.aux["entropy"]
         log_prob_grads = transition.aux["log_prob_grads"]
         entropy_grads = transition.aux["entropy_grads"]
+        actor_intermediates = transition.aux["intermediates"]
+        actor_vjp = transition.aux["actor_vjp"]
 
-        critic_value, critic_vjp = jax.vjp(
+        (critic_value, critic_intermediates), critic_vjp = jax.vjp(
             lambda params: self.critic_network.apply(
-                params, transition.first.obs
-            ).squeeze(-1),
+                params, transition.first.obs, mutable=["intermediates"]
+            ),
             state.critic_params,
         )
-        (critic_grads,) = critic_vjp(jnp.ones_like(critic_value))
+        (critic_grads,) = critic_vjp(
+            (jnp.ones_like(critic_value), jax.tree.map(jnp.zeros_like, critic_intermediates))
+        )
 
         critic_trace = jax.tree.map(
             lambda trace, grad: self.cfg.gamma * self.cfg.trace_lambda * trace + grad,
@@ -125,16 +144,16 @@ class ACLambda:
             state.critic_params,
             critic_grads,
             critic_trace,
-            lambda params: self.critic_network.apply(
-                params, transition.second.obs
-            ).squeeze(-1),
+            lambda params: remove_feature_axis(
+                self.critic_network.apply(params, transition.second.obs)
+            ),
             self.cfg.gamma,
             1.0 - transition.second.done.astype(jnp.float32),
         )
         td_error = (
             transition.second.reward
             + self.cfg.gamma * (1.0 - transition.second.done) * next_value
-            - critic_value
+            - remove_feature_axis(critic_value)
         )
 
         actor_grads = jax.tree.map(
@@ -174,19 +193,41 @@ class ACLambda:
         )
 
         if self.aux_actor_loss is not None:
-            aux_actor_grads = jax.grad(self.aux_actor_loss)(actor_params, transition)
+            _, next_intermediates = self.actor_network.apply(
+                state.actor_params, transition.second.obs, mutable=["intermediates"]
+            )
+            actor_transition = transition.replace(
+                aux={"intermediates": actor_intermediates, "next_intermediates": next_intermediates}
+            )
+            cotangents = jax.grad(
+                lambda i: self.aux_actor_loss(
+                    actor_transition.replace(aux={**actor_transition.aux, "intermediates": i})
+                )
+            )(actor_intermediates)
+            (aux_actor_grads,) = actor_vjp(
+                (jnp.zeros_like(log_prob), jnp.zeros_like(entropy), cotangents)
+            )
             actor_params = jax.tree.map(
-                lambda p, g: p - self.aux_actor_coefficient * g,
+                lambda p, g: p - g,
                 actor_params,
                 aux_actor_grads,
             )
 
         if self.aux_critic_loss is not None:
-            aux_critic_grads = jax.grad(self.aux_critic_loss)(
-                critic_params, transition
+            _, next_intermediates = self.critic_network.apply(
+                state.critic_params, transition.second.obs, mutable=["intermediates"]
             )
+            critic_transition = transition.replace(
+                aux={"intermediates": critic_intermediates, "next_intermediates": next_intermediates}
+            )
+            cotangents = jax.grad(
+                lambda i: self.aux_critic_loss(
+                    critic_transition.replace(aux={**critic_transition.aux, "intermediates": i})
+                )
+            )(critic_intermediates)
+            (aux_critic_grads,) = critic_vjp((jnp.zeros_like(critic_value), cotangents))
             critic_params = jax.tree.map(
-                lambda p, g: p - self.aux_critic_coefficient * g,
+                lambda p, g: p - g,
                 critic_params,
                 aux_critic_grads,
             )
@@ -200,8 +241,8 @@ class ACLambda:
             critic_trace,
         )
 
-        target = critic_value + td_error
-        explained_variance = 1 - jnp.var(td_error) / (jnp.var(target) + 1e-8)
+        td_target = remove_feature_axis(critic_value) + td_error
+        explained_variance = 1 - jnp.var(td_error) / (jnp.var(td_target) + 1e-8)
         lox.log(
             {
                 "critic/value": critic_value.mean(),

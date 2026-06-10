@@ -46,7 +46,6 @@ class SARSALambda:
     epsilon_schedule: Callable
     q_optimizer: Optimizer
     aux_loss: Callable | None = None
-    aux_coefficient: float = 1e-3
 
     def _env_step(
         self, state: SARSALambdaState, key: Key
@@ -55,8 +54,10 @@ class SARSALambda:
 
         action = state.next_action
 
-        q_values, q_vjp = jax.vjp(
-            lambda params: self.q_network.apply(params, state.timestep.obs),
+        (q_values, intermediates), q_vjp = jax.vjp(
+            lambda params: self.q_network.apply(
+                params, state.timestep.obs, mutable=["intermediates"]
+            ),
             state.q_params,
         )
 
@@ -86,6 +87,7 @@ class SARSALambda:
             aux={
                 "next_action": next_action,
                 "q_values": q_values,
+                "intermediates": intermediates,
                 "q_vjp": q_vjp,
             },
         )
@@ -111,11 +113,17 @@ class SARSALambda:
         action = transition.second.action
         next_action = transition.aux["next_action"]
         q_values = transition.aux["q_values"]
+        intermediates = transition.aux["intermediates"]
         q_vjp = transition.aux["q_vjp"]
         q_value = q_values[action]
 
         num_actions = self.env.action_space(self.env_params).n
-        (q_grads,) = q_vjp(jax.nn.one_hot(action, num_actions, dtype=q_values.dtype))
+        (q_grads,) = q_vjp(
+            (
+                jax.nn.one_hot(action, num_actions, dtype=q_values.dtype),
+                jax.tree.map(jnp.zeros_like, intermediates),
+            )
+        )
 
         q_trace = jax.tree.map(
             lambda trace, grad: self.cfg.gamma * self.cfg.trace_lambda * trace + grad,
@@ -146,10 +154,19 @@ class SARSALambda:
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
         if self.aux_loss is not None:
-            aux_grads = jax.grad(self.aux_loss)(q_params, transition)
-            q_params = jax.tree.map(
-                lambda p, g: p - self.aux_coefficient * g, q_params, aux_grads
+            _, next_intermediates = self.q_network.apply(
+                state.q_params, transition.second.obs, mutable=["intermediates"]
             )
+            transition = transition.replace(
+                aux={**transition.aux, "next_intermediates": next_intermediates}
+            )
+            cotangents = jax.grad(
+                lambda i: self.aux_loss(
+                    transition.replace(aux={**transition.aux, "intermediates": i})
+                )
+            )(intermediates)
+            (aux_grads,) = q_vjp((jnp.zeros_like(q_values), cotangents))
+            q_params = jax.tree.map(lambda p, g: p - g, q_params, aux_grads)
 
         q_trace = jax.tree.map(
             lambda t: jnp.where(transition.second.done, jnp.zeros_like(t), t), q_trace

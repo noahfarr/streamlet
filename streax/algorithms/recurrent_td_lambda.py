@@ -9,6 +9,7 @@ from flax import core, struct
 
 from streax.optimizers import Optimizer
 from streax.utils import Timestep, Transition, canonicalize_dtype
+from streax.utils.axes import remove_feature_axis
 from streax.utils.typing import Array, Environment, EnvParams, EnvState, Key, PyTree
 
 
@@ -38,7 +39,6 @@ class RecurrentTDLambda:
     value_network: nn.Module
     value_optimizer: Optimizer
     aux_loss: Callable | None = None
-    aux_coefficient: float = 1e-3
 
     def _env_step(
         self, state: RecurrentTDLambdaState, key: Key
@@ -48,17 +48,19 @@ class RecurrentTDLambda:
             action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
         )
 
-        (next_carry, value), value_vjp = jax.vjp(
+        ((next_carry, value), intermediates), value_vjp = jax.vjp(
             lambda params: self.value_network.apply(
-                params, state.carry, *state.timestep
+                params, state.carry, *state.timestep, mutable=["intermediates"]
             ),
             state.value_params,
         )
         (value_grads,) = value_vjp((
-            jax.tree.map(jnp.zeros_like, next_carry),
-            jnp.ones_like(value),
+            (
+                jax.tree.map(jnp.zeros_like, next_carry),
+                jnp.ones_like(value),
+            ),
+            jax.tree.map(jnp.zeros_like, intermediates),
         ))
-        value = value.squeeze(-1)
 
         next_obs, env_state, reward, done, info = self.env.step(
             key, state.env_state, action, self.env_params
@@ -72,6 +74,8 @@ class RecurrentTDLambda:
             aux={
                 "value": value,
                 "value_grads": value_grads,
+                "intermediates": intermediates,
+                "value_vjp": value_vjp,
                 "carry": state.carry,
                 "next_carry": next_carry,
             },
@@ -97,6 +101,8 @@ class RecurrentTDLambda:
     ) -> RecurrentTDLambdaState:
         value = transition.aux["value"]
         value_grads = transition.aux["value_grads"]
+        intermediates = transition.aux["intermediates"]
+        value_vjp = transition.aux["value_vjp"]
         next_carry = transition.aux["next_carry"]
 
         value_trace = jax.tree.map(
@@ -110,16 +116,16 @@ class RecurrentTDLambda:
             state.value_params,
             value_grads,
             value_trace,
-            lambda params: self.value_network.apply(
-                params, next_carry, *transition.second
-            )[1].squeeze(-1),
+            lambda params: remove_feature_axis(
+                self.value_network.apply(params, next_carry, *transition.second)[1]
+            ),
             self.cfg.gamma,
             1.0 - transition.second.done.astype(jnp.float32),
         )
         td_error = (
             transition.second.reward
             + self.cfg.gamma * (1.0 - transition.second.done) * next_value
-            - value
+            - remove_feature_axis(value)
         )
         value_updates, value_optimizer_state = self.value_optimizer.update(
             state.value_optimizer_state,
@@ -134,10 +140,22 @@ class RecurrentTDLambda:
         )
 
         if self.aux_loss is not None:
-            aux_grads = jax.grad(self.aux_loss)(value_params, transition)
-            value_params = jax.tree.map(
-                lambda p, g: p - self.aux_coefficient * g, value_params, aux_grads
+            _, next_intermediates = self.value_network.apply(
+                state.value_params, next_carry, *transition.second, mutable=["intermediates"]
             )
+            transition = transition.replace(
+                aux={**transition.aux, "next_intermediates": next_intermediates}
+            )
+            cotangents = jax.grad(
+                lambda i: self.aux_loss(
+                    transition.replace(aux={**transition.aux, "intermediates": i})
+                )
+            )(intermediates)
+            (aux_grads,) = value_vjp((
+                (jax.tree.map(jnp.zeros_like, next_carry), jnp.zeros_like(value)),
+                cotangents,
+            ))
+            value_params = jax.tree.map(lambda p, g: p - g, value_params, aux_grads)
 
         value_trace = jax.tree.map(
             lambda t: jnp.where(transition.second.done, jnp.zeros_like(t), t),

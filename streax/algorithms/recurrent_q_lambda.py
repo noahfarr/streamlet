@@ -39,7 +39,6 @@ class RecurrentQLambda:
     epsilon_schedule: Callable
     q_optimizer: Optimizer
     aux_loss: Callable | None = None
-    aux_coefficient: float = 1e-3
 
     def _env_step(
         self, state: RecurrentQLambdaState, key: Key, epsilon: Array
@@ -54,8 +53,10 @@ class RecurrentQLambda:
             maxval=action_space.n,
         )
 
-        (next_carry, q_values), q_vjp = jax.vjp(
-            lambda params: self.q_network.apply(params, state.carry, *state.timestep),
+        ((next_carry, q_values), intermediates), q_vjp = jax.vjp(
+            lambda params: self.q_network.apply(
+                params, state.carry, *state.timestep, mutable=["intermediates"]
+            ),
             state.q_params,
         )
         greedy_action = jnp.argmax(q_values, axis=-1)
@@ -66,8 +67,11 @@ class RecurrentQLambda:
 
         q_value = q_values[action]
         (q_grads,) = q_vjp((
-            jax.tree.map(jnp.zeros_like, next_carry),
-            jax.nn.one_hot(action, action_space.n, dtype=q_values.dtype),
+            (
+                jax.tree.map(jnp.zeros_like, next_carry),
+                jax.nn.one_hot(action, action_space.n, dtype=q_values.dtype),
+            ),
+            jax.tree.map(jnp.zeros_like, intermediates),
         ))
 
         next_obs, env_state, reward, done, info = self.env.step(
@@ -82,7 +86,10 @@ class RecurrentQLambda:
             aux={
                 "non_greedy": non_greedy,
                 "q_value": q_value,
+                "q_values": q_values,
                 "q_grads": q_grads,
+                "intermediates": intermediates,
+                "q_vjp": q_vjp,
                 "carry": state.carry,
                 "next_carry": next_carry,
             },
@@ -110,7 +117,10 @@ class RecurrentQLambda:
     ) -> RecurrentQLambdaState:
         non_greedy = transition.aux["non_greedy"]
         q_value = transition.aux["q_value"]
+        q_values = transition.aux["q_values"]
         q_grads = transition.aux["q_grads"]
+        intermediates = transition.aux["intermediates"]
+        q_vjp = transition.aux["q_vjp"]
         next_carry = transition.aux["next_carry"]
 
         q_trace = jax.tree.map(
@@ -146,10 +156,22 @@ class RecurrentQLambda:
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
         if self.aux_loss is not None:
-            aux_grads = jax.grad(self.aux_loss)(q_params, transition)
-            q_params = jax.tree.map(
-                lambda p, g: p - self.aux_coefficient * g, q_params, aux_grads
+            _, next_intermediates = self.q_network.apply(
+                state.q_params, next_carry, *transition.second, mutable=["intermediates"]
             )
+            transition = transition.replace(
+                aux={**transition.aux, "next_intermediates": next_intermediates}
+            )
+            cotangents = jax.grad(
+                lambda i: self.aux_loss(
+                    transition.replace(aux={**transition.aux, "intermediates": i})
+                )
+            )(intermediates)
+            (aux_grads,) = q_vjp((
+                (jax.tree.map(jnp.zeros_like, next_carry), jnp.zeros_like(q_values)),
+                cotangents,
+            ))
+            q_params = jax.tree.map(lambda p, g: p - g, q_params, aux_grads)
 
         q_trace = jax.tree.map(
             lambda t: jnp.where(

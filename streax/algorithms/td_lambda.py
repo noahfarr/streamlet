@@ -9,6 +9,7 @@ from flax import core, struct
 
 from streax.optimizers import Optimizer
 from streax.utils import Timestep, Transition, canonicalize_dtype
+from streax.utils.axes import remove_feature_axis
 from streax.utils.typing import Environment, EnvParams, EnvState, Key, PyTree
 
 
@@ -37,7 +38,6 @@ class TDLambda:
     value_network: nn.Module
     value_optimizer: Optimizer
     aux_loss: Callable | None = None
-    aux_coefficient: float = 1e-3
 
     def _env_step(
         self, state: TDLambdaState, key: Key
@@ -75,13 +75,15 @@ class TDLambda:
     def _update_step(
         self, state: TDLambdaState, transition: Transition
     ) -> TDLambdaState:
-        value, value_vjp = jax.vjp(
+        (value, intermediates), value_vjp = jax.vjp(
             lambda params: self.value_network.apply(
-                params, transition.first.obs
-            ).squeeze(-1),
+                params, transition.first.obs, mutable=["intermediates"]
+            ),
             state.value_params,
         )
-        (value_grads,) = value_vjp(jnp.ones_like(value))
+        (value_grads,) = value_vjp(
+            (jnp.ones_like(value), jax.tree.map(jnp.zeros_like, intermediates))
+        )
 
         value_trace = jax.tree.map(
             lambda trace, grad: self.cfg.gamma * self.cfg.trace_lambda * trace + grad,
@@ -94,16 +96,16 @@ class TDLambda:
             state.value_params,
             value_grads,
             value_trace,
-            lambda params: self.value_network.apply(
-                params, transition.second.obs
-            ).squeeze(-1),
+            lambda params: remove_feature_axis(
+                self.value_network.apply(params, transition.second.obs)
+            ),
             self.cfg.gamma,
             1.0 - transition.second.done.astype(jnp.float32),
         )
         td_error = (
             transition.second.reward
             + self.cfg.gamma * (1.0 - transition.second.done) * next_value
-            - value
+            - remove_feature_axis(value)
         )
         value_updates, value_optimizer_state = self.value_optimizer.update(
             state.value_optimizer_state,
@@ -118,10 +120,19 @@ class TDLambda:
         )
 
         if self.aux_loss is not None:
-            aux_grads = jax.grad(self.aux_loss)(value_params, transition)
-            value_params = jax.tree.map(
-                lambda p, g: p - self.aux_coefficient * g, value_params, aux_grads
+            _, next_intermediates = self.value_network.apply(
+                state.value_params, transition.second.obs, mutable=["intermediates"]
             )
+            transition = transition.replace(
+                aux={"intermediates": intermediates, "next_intermediates": next_intermediates}
+            )
+            cotangents = jax.grad(
+                lambda i: self.aux_loss(
+                    transition.replace(aux={**transition.aux, "intermediates": i})
+                )
+            )(intermediates)
+            (aux_grads,) = value_vjp((jnp.zeros_like(value), cotangents))
+            value_params = jax.tree.map(lambda p, g: p - g, value_params, aux_grads)
 
         value_trace = jax.tree.map(
             lambda t: jnp.where(transition.second.done, jnp.zeros_like(t), t),

@@ -9,6 +9,7 @@ from flax import core, struct
 
 from streax.optimizers import Optimizer
 from streax.utils import Timestep, Transition, TDErrorScalerState, canonicalize_dtype
+from streax.utils.axes import remove_feature_axis
 from streax.utils.typing import Array, Environment, EnvParams, EnvState, Key, PyTree
 
 
@@ -44,8 +45,6 @@ class AVGLambda:
     critic_optimizer: Optimizer
     aux_actor_loss: Callable | None = None
     aux_critic_loss: Callable | None = None
-    aux_actor_coefficient: float = 1e-3
-    aux_critic_coefficient: float = 1e-3
 
     def _env_step(
         self, state: AVGLambdaState, key: Key, temperature: Array
@@ -101,10 +100,12 @@ class AVGLambda:
         next_action, next_log_prob = next_dist.sample_and_log_prob(
             seed=next_action_key
         )
-        next_q_value = self.critic_network.apply(
-            jax.lax.stop_gradient(state.critic_params),
-            transition.second.obs,
-            next_action,
+        next_q_value = remove_feature_axis(
+            self.critic_network.apply(
+                jax.lax.stop_gradient(state.critic_params),
+                transition.second.obs,
+                next_action,
+            )
         )
         next_value = next_q_value - self.cfg.alpha * next_log_prob
 
@@ -115,8 +116,10 @@ class AVGLambda:
         sigma = td_scaler.sigma()
 
         q_value, q_grads = jax.value_and_grad(
-            lambda params: self.critic_network.apply(
-                params, transition.first.obs, transition.second.action
+            lambda params: remove_feature_axis(
+                self.critic_network.apply(
+                    params, transition.first.obs, transition.second.action
+                )
             )
         )(state.critic_params)
         td_error = (
@@ -132,10 +135,12 @@ class AVGLambda:
             sampled_action, sampled_log_prob = dist.sample_and_log_prob(
                 seed=sample_key
             )
-            sampled_q = self.critic_network.apply(
-                jax.lax.stop_gradient(state.critic_params),
-                transition.first.obs,
-                sampled_action,
+            sampled_q = remove_feature_axis(
+                self.critic_network.apply(
+                    jax.lax.stop_gradient(state.critic_params),
+                    transition.first.obs,
+                    sampled_action,
+                )
             )
             return self.cfg.alpha * sampled_log_prob - sampled_q
 
@@ -168,25 +173,59 @@ class AVGLambda:
         )
 
         if self.aux_actor_loss is not None:
-            aux_actor_grads = jax.grad(self.aux_actor_loss)(actor_params, transition)
+            (dist, intermediates), actor_vjp = jax.vjp(
+                lambda params: self.actor_network.apply(
+                    params, transition.first.obs, mutable=["intermediates"]
+                ),
+                state.actor_params,
+            )
+            _, next_intermediates = self.actor_network.apply(
+                state.actor_params, transition.second.obs, mutable=["intermediates"]
+            )
+            actor_transition = transition.replace(
+                aux={"intermediates": intermediates, "next_intermediates": next_intermediates}
+            )
+            cotangents = jax.grad(
+                lambda i: self.aux_actor_loss(
+                    actor_transition.replace(aux={**actor_transition.aux, "intermediates": i})
+                )
+            )(intermediates)
+            (aux_actor_grads,) = actor_vjp((jax.tree.map(jnp.zeros_like, dist), cotangents))
             actor_params = jax.tree.map(
-                lambda p, g: p - self.aux_actor_coefficient * g,
+                lambda p, g: p - g,
                 actor_params,
                 aux_actor_grads,
             )
 
         if self.aux_critic_loss is not None:
-            aux_critic_grads = jax.grad(self.aux_critic_loss)(
-                critic_params, transition
+            (critic_out, critic_intermediates), critic_vjp = jax.vjp(
+                lambda params: self.critic_network.apply(
+                    params, transition.first.obs, transition.second.action,
+                    mutable=["intermediates"],
+                ),
+                state.critic_params,
             )
+            _, next_intermediates = self.critic_network.apply(
+                state.critic_params, transition.second.obs, transition.second.action,
+                mutable=["intermediates"],
+            )
+            critic_transition = transition.replace(
+                aux={"intermediates": critic_intermediates, "next_intermediates": next_intermediates}
+            )
+            cotangents = jax.grad(
+                lambda i: self.aux_critic_loss(
+                    critic_transition.replace(aux={**critic_transition.aux, "intermediates": i})
+                )
+            )(critic_intermediates)
+            (aux_critic_grads,) = critic_vjp((jnp.zeros_like(critic_out), cotangents))
             critic_params = jax.tree.map(
-                lambda p, g: p - self.aux_critic_coefficient * g,
+                lambda p, g: p - g,
                 critic_params,
                 aux_critic_grads,
             )
 
-        target = q_value + td_error
-        explained_variance = 1 - jnp.var(td_error) / (jnp.var(target) + 1e-8)
+        td_target = q_value + td_error
+        explained_variance = 1 - jnp.var(td_error) / (jnp.var(td_target) + 1e-8)
         lox.log(
             {
                 "actor/loss": actor_loss.mean(),

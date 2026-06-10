@@ -38,7 +38,6 @@ class QLambda:
     epsilon_schedule: Callable
     q_optimizer: Optimizer
     aux_loss: Callable | None = None
-    aux_coefficient: float = 1e-3
 
     def _env_step(
         self, state: QLambdaState, key: Key, epsilon: Array
@@ -151,14 +150,19 @@ class QLambda:
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
         if self.aux_loss is not None:
-            _, targets = self.q_network.apply(
+            _, next_intermediates = self.q_network.apply(
                 state.q_params, transition.second.obs, mutable=["intermediates"]
             )
-            cotangents = jax.grad(self.aux_loss)(intermediates, targets, transition)
-            (aux_grads,) = q_vjp((jnp.zeros_like(q_values), cotangents))
-            q_params = jax.tree.map(
-                lambda p, g: p - self.aux_coefficient * g, q_params, aux_grads
+            transition = transition.replace(
+                aux={**transition.aux, "next_intermediates": next_intermediates}
             )
+            cotangents = jax.grad(
+                lambda i: self.aux_loss(
+                    transition.replace(aux={**transition.aux, "intermediates": i})
+                )
+            )(intermediates)
+            (aux_grads,) = q_vjp((jnp.zeros_like(q_values), cotangents))
+            q_params = jax.tree.map(lambda p, g: p - g, q_params, aux_grads)
 
         q_trace = jax.tree.map(
             lambda t: jnp.where(
