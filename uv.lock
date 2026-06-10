@@ -59,6 +59,18 @@ wheels = [
 ]
 
 [[package]]
+name = "animax"
+version = "0.1.0"
+source = { git = "ssh://git@github.com/noahfarr/blinx.git#5b1636169f6b7a8002bac14e8c53206b75ddec00" }
+dependencies = [
+    { name = "chex" },
+    { name = "flax" },
+    { name = "gymnax" },
+    { name = "jax" },
+    { name = "numpy" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2145,6 +2157,7 @@ name = "streax"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "animax" },
     { name = "brax" },
     { name = "craftax" },
     { name = "distrax" },
@@ -2186,6 +2199,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "ale-py", extras = ["gymnasium"], marker = "extra == 'ale'" },
+    { name = "animax", git = "ssh://git@github.com/noahfarr/blinx.git" },
     { name = "brax", specifier = ">=0.10.0" },
     { name = "craftax", specifier = ">=1.5.0" },
     { name = "craftax", marker = "extra == 'craftax'" },

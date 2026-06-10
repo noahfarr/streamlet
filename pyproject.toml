@@ -19,6 +19,7 @@ dependencies = [
     "rich",
     "wandb",
     "craftax>=1.5.0",
+    "animax",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,7 @@ craftax   = ["craftax"]
 
 [tool.uv.sources]
 lox = { git = "https://github.com/huterguier/lox", branch = "dev" }
+animax = { git = "ssh://git@github.com/noahfarr/blinx.git" }
 slurmpilot = { git = "ssh://git@github.com/noahfarr/slurmpilot.git", branch = "feat/spignore" }
 
 [dependency-groups]

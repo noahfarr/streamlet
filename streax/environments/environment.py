@@ -1,5 +1,6 @@
 from streax.environments import (
     ale,
+    animax,
     brax,
     craftax,
     ett,
@@ -18,6 +19,7 @@ register = {
     "pufferlib": pufferlib.make,
     "minatar": minatar.make,
     "craftax": craftax.make,
+    "animax": animax.make,
 }
 
 
