@@ -9,3 +9,6 @@ class Timestep:
     action: Array | None = None
     reward: Array | None = None
     done: Array | None = None
+
+    def __iter__(self):
+        return iter((self.obs, self.action, self.reward, self.done))

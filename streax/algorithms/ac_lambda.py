@@ -1,12 +1,10 @@
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Callable
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -25,7 +23,6 @@ class ACLambdaConfig:
 @struct.dataclass(frozen=True)
 class ACLambdaState:
     step: int
-    update_step: int
     timestep: Timestep
     env_state: EnvState
     actor_params: core.FrozenDict[str, Any]
@@ -34,8 +31,6 @@ class ACLambdaState:
     critic_trace: PyTree
     actor_optimizer_state: PyTree
     critic_optimizer_state: PyTree
-    aux_actor_optimizer_state: PyTree
-    aux_critic_optimizer_state: PyTree
 
 
 @dataclass
@@ -47,17 +42,20 @@ class ACLambda:
     critic_network: nn.Module
     actor_optimizer: Optimizer
     critic_optimizer: Optimizer
-    aux_actor_loss: Callable = lambda params, transition: 0.0
-    aux_critic_loss: Callable = lambda params, transition: 0.0
-    aux_actor_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
-    aux_critic_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
+    aux_actor_loss: Callable | None = None
+    aux_critic_loss: Callable | None = None
+    aux_actor_coefficient: float = 1e-3
+    aux_critic_coefficient: float = 1e-3
 
-    def _stochastic_action(
-        self, key: Key, state: ACLambdaState
-    ) -> tuple[ACLambdaState, Array, dict]:
+    def _env_step(
+        self, state: ACLambdaState, key: Key, temperature: Array
+    ) -> tuple[ACLambdaState, Transition]:
+        action_key, step_key = jax.random.split(key)
+
         def log_prob_and_entropy(params):
             dist = self.actor_network.apply(params, state.timestep.obs)
-            action, _ = dist.sample_and_log_prob(seed=key)
+            action, _ = dist.sample_and_log_prob(seed=action_key)
+            action = jnp.where(temperature == 0.0, dist.mode(), action)
             action = jax.lax.stop_gradient(action)
             return (dist.log_prob(action), dist.entropy()), action
 
@@ -68,27 +66,6 @@ class ACLambda:
             (jnp.ones_like(log_prob), jnp.zeros_like(entropy))
         )
         (entropy_grads,) = actor_vjp((jnp.zeros_like(log_prob), jnp.ones_like(entropy)))
-        aux = {
-            "log_prob": log_prob,
-            "entropy": entropy,
-            "log_prob_grads": log_prob_grads,
-            "entropy_grads": entropy_grads,
-        }
-        return state, action, aux
-
-    def _deterministic_action(
-        self, key: Key, state: ACLambdaState
-    ) -> tuple[ACLambdaState, Array, dict]:
-        dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
-        action = dist.mode()
-        aux = {"log_prob": dist.log_prob(action), "entropy": dist.entropy()}
-        return state, action, aux
-
-    def _step(
-        self, state: ACLambdaState, key: Key, *, policy: Callable
-    ) -> tuple[ACLambdaState, Transition]:
-        action_key, step_key = jax.random.split(key)
-        state, action, aux = policy(action_key, state)
 
         next_obs, env_state, reward, done, info = self.env.step(
             step_key, state.env_state, action, self.env_params
@@ -99,7 +76,12 @@ class ACLambda:
         transition = Transition(
             first=state.timestep,
             second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
-            aux=aux,
+            aux={
+                "log_prob": log_prob,
+                "entropy": entropy,
+                "log_prob_grads": log_prob_grads,
+                "entropy_grads": entropy_grads,
+            },
         )
 
         return (
@@ -117,59 +99,37 @@ class ACLambda:
         )
 
     def _update_step(
-        self, state: ACLambdaState, key: Key, *, policy: Callable
-    ) -> tuple[ACLambdaState, None]:
-        state, transition = self._step(state, key, policy=policy)
-        state = self._update(state, transition)
-        return state.replace(update_step=state.update_step + 1), None
-
-    def _update(
         self,
         state: ACLambdaState,
         transition: Transition,
     ) -> ACLambdaState:
-        aux = transition.aux
-        log_probs = aux["log_prob"]
-        entropy_values = aux["entropy"]
-        log_prob_grads = aux["log_prob_grads"]
-        entropy_grads = aux["entropy_grads"]
+        log_prob_grads = transition.aux["log_prob_grads"]
+        entropy_grads = transition.aux["entropy_grads"]
 
-        def get_value(params):
-            critic_value = self.critic_network.apply(params, transition.first.obs)
-            return critic_value.squeeze(-1)
-
-        critic_value, critic_vjp = jax.vjp(get_value, state.critic_params)
+        critic_value, critic_vjp = jax.vjp(
+            lambda params: self.critic_network.apply(
+                params, transition.first.obs
+            ).squeeze(-1),
+            state.critic_params,
+        )
         (critic_grads,) = critic_vjp(jnp.ones_like(critic_value))
 
-        reset_trace = transition.second.done
-        discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
+        critic_trace = jax.tree.map(
+            lambda trace, grad: self.cfg.gamma * self.cfg.trace_lambda * trace + grad,
+            state.critic_trace,
+            critic_grads,
+        )
 
-        def accumulate(trace, gradient):
-            return jax.tree.map(
-                lambda t, g: (discount * t + g).astype(t.dtype), trace, gradient
-            )
-
-        def reset_eligibility(trace):
-            return jax.tree.map(
-                lambda t: jnp.where(reset_trace, jnp.zeros_like(t), t),
-                trace,
-            )
-
-        critic_trace = accumulate(state.critic_trace, critic_grads)
-
-        def get_next_value(params):
-            critic_value = self.critic_network.apply(params, transition.second.obs)
-            return critic_value.squeeze(-1)
-
-        not_done = 1.0 - transition.second.done.astype(jnp.float32)
         next_value, curvature = self.critic_optimizer.bootstrap(
             state.critic_optimizer_state,
             state.critic_params,
             critic_grads,
             critic_trace,
-            get_next_value,
+            lambda params: self.critic_network.apply(
+                params, transition.second.obs
+            ).squeeze(-1),
             self.cfg.gamma,
-            not_done,
+            1.0 - transition.second.done.astype(jnp.float32),
         )
         td_error = (
             transition.second.reward
@@ -183,7 +143,11 @@ class ACLambda:
             log_prob_grads,
             entropy_grads,
         )
-        actor_trace = accumulate(state.actor_trace, actor_grads)
+        actor_trace = jax.tree.map(
+            lambda trace, grad: self.cfg.gamma * self.cfg.trace_lambda * trace + grad,
+            state.actor_trace,
+            actor_grads,
+        )
 
         actor_updates, actor_optimizer_state = self.actor_optimizer.update(
             state.actor_optimizer_state,
@@ -209,51 +173,54 @@ class ACLambda:
             lambda p, u: p + u, state.critic_params, critic_updates
         )
 
-        _, aux_actor_grads = jax.value_and_grad(self.aux_actor_loss)(
-            actor_params, transition
-        )
-        aux_actor_updates, aux_actor_optimizer_state = self.aux_actor_optimizer.update(
-            aux_actor_grads, state.aux_actor_optimizer_state, actor_params
-        )
-        actor_params = optax.apply_updates(actor_params, aux_actor_updates)
-
-        _, aux_critic_grads = jax.value_and_grad(self.aux_critic_loss)(
-            critic_params, transition
-        )
-        aux_critic_updates, aux_critic_optimizer_state = (
-            self.aux_critic_optimizer.update(
-                aux_critic_grads, state.aux_critic_optimizer_state, critic_params
+        if self.aux_actor_loss is not None:
+            aux_actor_grads = jax.grad(self.aux_actor_loss)(actor_params, transition)
+            actor_params = jax.tree.map(
+                lambda p, g: p - self.aux_actor_coefficient * g,
+                actor_params,
+                aux_actor_grads,
             )
-        )
-        critic_params = optax.apply_updates(critic_params, aux_critic_updates)
 
-        new_actor_trace = reset_eligibility(actor_trace)
-        new_critic_trace = reset_eligibility(critic_trace)
+        if self.aux_critic_loss is not None:
+            aux_critic_grads = jax.grad(self.aux_critic_loss)(
+                critic_params, transition
+            )
+            critic_params = jax.tree.map(
+                lambda p, g: p - self.aux_critic_coefficient * g,
+                critic_params,
+                aux_critic_grads,
+            )
+
+        actor_trace = jax.tree.map(
+            lambda t: jnp.where(transition.second.done, jnp.zeros_like(t), t),
+            actor_trace,
+        )
+        critic_trace = jax.tree.map(
+            lambda t: jnp.where(transition.second.done, jnp.zeros_like(t), t),
+            critic_trace,
+        )
 
         target = critic_value + td_error
         explained_variance = 1 - jnp.var(td_error) / (jnp.var(target) + 1e-8)
-        log_dict = {
-            "critic/value": critic_value.mean(),
-            "critic/td_error": td_error.mean(),
-            "critic/absolute_td_error": jnp.abs(td_error).mean(),
-            "critic/explained_variance": explained_variance,
-            "actor/log_prob": log_probs.mean(),
-            "actor/entropy": entropy_values.mean(),
-        }
-        lox.log(log_dict)
-
-        new_state = dict(
-            actor_params=actor_params,
-            critic_params=critic_params,
-            actor_trace=new_actor_trace,
-            critic_trace=new_critic_trace,
-            actor_optimizer_state=actor_optimizer_state,
-            critic_optimizer_state=critic_optimizer_state,
-            aux_actor_optimizer_state=aux_actor_optimizer_state,
-            aux_critic_optimizer_state=aux_critic_optimizer_state,
+        lox.log(
+            {
+                "critic/value": critic_value.mean(),
+                "critic/td_error": td_error.mean(),
+                "critic/absolute_td_error": jnp.abs(td_error).mean(),
+                "critic/explained_variance": explained_variance,
+                "actor/log_prob": transition.aux["log_prob"].mean(),
+                "actor/entropy": transition.aux["entropy"].mean(),
+            }
         )
 
-        return state.replace(**new_state)
+        return state.replace(
+            actor_params=actor_params,
+            critic_params=critic_params,
+            actor_trace=actor_trace,
+            critic_trace=critic_trace,
+            actor_optimizer_state=actor_optimizer_state,
+            critic_optimizer_state=critic_optimizer_state,
+        )
 
     def init(self, key: Key) -> ACLambdaState:
         env_key, actor_key, critic_key = jax.random.split(key, 3)
@@ -268,15 +235,12 @@ class ACLambda:
 
         actor_optimizer_state = self.actor_optimizer.init(actor_params)
         critic_optimizer_state = self.critic_optimizer.init(critic_params)
-        aux_actor_optimizer_state = self.aux_actor_optimizer.init(actor_params)
-        aux_critic_optimizer_state = self.aux_critic_optimizer.init(critic_params)
 
         actor_trace = jax.tree.map(jnp.zeros_like, actor_params)
         critic_trace = jax.tree.map(jnp.zeros_like, critic_params)
 
-        state = dict(
+        return ACLambdaState(
             step=0,
-            update_step=0,
             timestep=timestep,
             env_state=env_state,
             actor_params=actor_params,
@@ -285,21 +249,17 @@ class ACLambda:
             critic_trace=critic_trace,
             actor_optimizer_state=actor_optimizer_state,
             critic_optimizer_state=critic_optimizer_state,
-            aux_actor_optimizer_state=aux_actor_optimizer_state,
-            aux_critic_optimizer_state=aux_critic_optimizer_state,
         )
 
-        return ACLambdaState(**state)
-
-    def warmup(self, key: Key, state: ACLambdaState, num_steps: int) -> ACLambdaState:
-        return state
-
     def train(self, key: Key, state: ACLambdaState, num_steps: int) -> ACLambdaState:
-        keys = jax.random.split(key, num_steps)
+        def step(state, key):
+            state, transition = self._env_step(state, key, 1.0)
+            return self._update_step(state, transition), None
+
         state, _ = jax.lax.scan(
-            partial(self._update_step, policy=self._stochastic_action),
+            step,
             state,
-            keys,
+            jax.random.split(key, num_steps),
             unroll=self.cfg.unroll,
         )
         return state
@@ -327,9 +287,9 @@ class ACLambda:
             env_state=env_state,
         )
 
-        state, _ = jax.lax.scan(
-            partial(self._step, policy=self._deterministic_action),
-            state,
-            jax.random.split(eval_key, num_steps),
-        )
+        def step(state, key):
+            state, _ = self._env_step(state, key, 0.0)
+            return state, None
+
+        state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))
         return state

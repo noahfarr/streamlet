@@ -1,12 +1,10 @@
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Callable
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -24,14 +22,12 @@ class RecurrentTDLambdaConfig:
 @struct.dataclass(frozen=True)
 class RecurrentTDLambdaState:
     step: int
-    update_step: int
     timestep: Timestep
     carry: PyTree
     env_state: EnvState
     value_params: core.FrozenDict[str, Any]
     value_trace: PyTree
     value_optimizer_state: PyTree
-    aux_optimizer_state: PyTree
 
 
 @dataclass
@@ -41,22 +37,10 @@ class RecurrentTDLambda:
     env_params: EnvParams
     value_network: nn.Module
     value_optimizer: Optimizer
-    aux_loss: Callable = lambda params, transition: 0.0
-    aux_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
+    aux_loss: Callable | None = None
+    aux_coefficient: float = 1e-3
 
-    def _apply(
-        self, params: PyTree, carry: PyTree, timestep: Timestep
-    ) -> tuple[PyTree, Array]:
-        return self.value_network.apply(
-            params,
-            carry,
-            timestep.obs,
-            timestep.action,
-            timestep.reward,
-            timestep.done,
-        )
-
-    def _step(
+    def _env_step(
         self, state: RecurrentTDLambdaState, key: Key
     ) -> tuple[RecurrentTDLambdaState, Transition]:
         action_space = self.env.action_space(self.env_params)
@@ -65,7 +49,10 @@ class RecurrentTDLambda:
         )
 
         (next_carry, value), value_vjp = jax.vjp(
-            lambda p: self._apply(p, state.carry, state.timestep), state.value_params
+            lambda params: self.value_network.apply(
+                params, state.carry, *state.timestep
+            ),
+            state.value_params,
         )
         (value_grads,) = value_vjp((
             jax.tree.map(jnp.zeros_like, next_carry),
@@ -106,41 +93,28 @@ class RecurrentTDLambda:
         )
 
     def _update_step(
-        self, state: RecurrentTDLambdaState, key: Key
-    ) -> tuple[RecurrentTDLambdaState, None]:
-        state, transition = self._step(state, key)
-        state = self._update(state, transition)
-        return state.replace(update_step=state.update_step + 1), None
-
-    def _update(
         self, state: RecurrentTDLambdaState, transition: Transition
     ) -> RecurrentTDLambdaState:
         value = transition.aux["value"]
         value_grads = transition.aux["value_grads"]
         next_carry = transition.aux["next_carry"]
 
-        reset_trace = transition.second.done
-        discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
-
         value_trace = jax.tree.map(
-            lambda t, g: (discount * t + g).astype(t.dtype),
+            lambda trace, grad: self.cfg.gamma * self.cfg.trace_lambda * trace + grad,
             state.value_trace,
             value_grads,
         )
 
-        def get_next_value(params):
-            _, next_value = self._apply(params, next_carry, transition.second)
-            return next_value.squeeze(-1)
-
-        not_done = 1.0 - transition.second.done.astype(jnp.float32)
         next_value, curvature = self.value_optimizer.bootstrap(
             state.value_optimizer_state,
             state.value_params,
             value_grads,
             value_trace,
-            get_next_value,
+            lambda params: self.value_network.apply(
+                params, next_carry, *transition.second
+            )[1].squeeze(-1),
             self.cfg.gamma,
-            not_done,
+            1.0 - transition.second.done.astype(jnp.float32),
         )
         td_error = (
             transition.second.reward
@@ -159,30 +133,30 @@ class RecurrentTDLambda:
             lambda p, u: p + u, state.value_params, value_updates
         )
 
-        _, aux_grads = jax.value_and_grad(self.aux_loss)(value_params, transition)
-        aux_updates, aux_optimizer_state = self.aux_optimizer.update(
-            aux_grads, state.aux_optimizer_state, value_params
-        )
-        value_params = optax.apply_updates(value_params, aux_updates)
+        if self.aux_loss is not None:
+            aux_grads = jax.grad(self.aux_loss)(value_params, transition)
+            value_params = jax.tree.map(
+                lambda p, g: p - self.aux_coefficient * g, value_params, aux_grads
+            )
 
-        new_value_trace = jax.tree.map(
-            lambda t: jnp.where(reset_trace, jnp.zeros_like(t), t),
+        value_trace = jax.tree.map(
+            lambda t: jnp.where(transition.second.done, jnp.zeros_like(t), t),
             value_trace,
         )
 
-        log_dict = {
-            "value/value": next_value.mean(),
-            "value/td_error": td_error.mean(),
-            "value/absolute_td_error": jnp.abs(td_error).mean(),
-            "value/cumulant": transition.second.reward.mean(),
-        }
-        lox.log(log_dict)
+        lox.log(
+            {
+                "value/value": next_value.mean(),
+                "value/td_error": td_error.mean(),
+                "value/absolute_td_error": jnp.abs(td_error).mean(),
+                "value/cumulant": transition.second.reward.mean(),
+            }
+        )
 
         return state.replace(
             value_params=value_params,
-            value_trace=new_value_trace,
+            value_trace=value_trace,
             value_optimizer_state=value_optimizer_state,
-            aux_optimizer_state=aux_optimizer_state,
         )
 
     def init(self, key: Key) -> RecurrentTDLambdaState:
@@ -197,45 +171,33 @@ class RecurrentTDLambda:
         )
 
         carry = self.value_network.initialize_carry(carry_key)
-        value_params = self.value_network.init(
-            value_key,
-            carry,
-            timestep.obs,
-            timestep.action,
-            timestep.reward,
-            timestep.done,
-        )
+        value_params = self.value_network.init(value_key, carry, *timestep)
 
         value_optimizer_state = self.value_optimizer.init(value_params)
-        aux_optimizer_state = self.aux_optimizer.init(value_params)
 
         value_trace = jax.tree.map(jnp.zeros_like, value_params)
 
         return RecurrentTDLambdaState(
             step=0,
-            update_step=0,
             timestep=timestep,
             carry=carry,
             env_state=env_state,
             value_params=value_params,
             value_trace=value_trace,
             value_optimizer_state=value_optimizer_state,
-            aux_optimizer_state=aux_optimizer_state,
         )
-
-    def warmup(
-        self, key: Key, state: RecurrentTDLambdaState, num_steps: int
-    ) -> RecurrentTDLambdaState:
-        return state
 
     def train(
         self, key: Key, state: RecurrentTDLambdaState, num_steps: int
     ) -> RecurrentTDLambdaState:
-        keys = jax.random.split(key, num_steps)
+        def step(state, key):
+            state, transition = self._env_step(state, key)
+            return self._update_step(state, transition), None
+
         state, _ = jax.lax.scan(
-            self._update_step,
+            step,
             state,
-            keys,
+            jax.random.split(key, num_steps),
             unroll=self.cfg.unroll,
         )
         return state
@@ -261,9 +223,9 @@ class RecurrentTDLambda:
             env_state=env_state,
         )
 
-        state, _ = jax.lax.scan(
-            self._step,
-            state,
-            jax.random.split(eval_key, num_steps),
-        )
+        def step(state, key):
+            state, _ = self._env_step(state, key)
+            return state, None
+
+        state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))
         return state

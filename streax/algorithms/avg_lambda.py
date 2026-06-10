@@ -1,24 +1,15 @@
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Callable
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
 from streax.utils import Timestep, Transition, TDErrorScalerState, canonicalize_dtype
-from streax.utils.typing import (
-    Array,
-    Environment,
-    EnvParams,
-    EnvState,
-    Key,
-    PyTree,
-)
+from streax.utils.typing import Array, Environment, EnvParams, EnvState, Key, PyTree
 
 
 @struct.dataclass(frozen=True)
@@ -32,7 +23,6 @@ class AVGLambdaConfig:
 @struct.dataclass(frozen=True)
 class AVGLambdaState:
     step: int
-    update_step: int
     timestep: Timestep
     env_state: EnvState
     actor_params: core.FrozenDict[str, Any]
@@ -41,8 +31,6 @@ class AVGLambdaState:
     critic_optimizer_state: PyTree
     critic_trace: PyTree
     td_scaler: TDErrorScalerState
-    aux_actor_optimizer_state: PyTree
-    aux_critic_optimizer_state: PyTree
 
 
 @dataclass
@@ -54,35 +42,21 @@ class AVGLambda:
     critic_network: nn.Module
     actor_optimizer: Optimizer
     critic_optimizer: Optimizer
-    aux_actor_loss: Callable = lambda params, transition: 0.0
-    aux_critic_loss: Callable = lambda params, transition: 0.0
-    aux_actor_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
-    aux_critic_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
+    aux_actor_loss: Callable | None = None
+    aux_critic_loss: Callable | None = None
+    aux_actor_coefficient: float = 1e-3
+    aux_critic_coefficient: float = 1e-3
 
-    def _sample_action(
-        self, params: PyTree, obs: Array, key: Key
-    ) -> tuple[Array, Array]:
-        dist = self.actor_network.apply(params, obs)
-        return dist.sample_and_log_prob(seed=key)
-
-    def _stochastic_action(
-        self, key: Key, state: AVGLambdaState
-    ) -> tuple[Array, Array]:
-        return self._sample_action(state.actor_params, state.timestep.obs, key)
-
-    def _deterministic_action(
-        self, key: Key, state: AVGLambdaState
-    ) -> tuple[Array, Array]:
-        dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
-        action = dist.bijector.forward(dist.distribution.mode())
-        log_prob = dist.log_prob(action)
-        return action, log_prob
-
-    def _step(
-        self, state: AVGLambdaState, key: Key, *, policy: Callable
+    def _env_step(
+        self, state: AVGLambdaState, key: Key, temperature: Array
     ) -> tuple[AVGLambdaState, Transition]:
-        action_key, step_key = jax.random.split(key)
-        action, log_prob = policy(action_key, state)
+        sample_key, step_key, next_action_key = jax.random.split(key, 3)
+
+        dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
+        action, log_prob = dist.sample_and_log_prob(seed=sample_key)
+        mode = dist.bijector.forward(dist.distribution.mode())
+        action = jnp.where(temperature == 0.0, mode, action)
+        log_prob = jnp.where(temperature == 0.0, dist.log_prob(mode), log_prob)
 
         next_obs, env_state, reward, done, info = self.env.step(
             step_key, state.env_state, action, self.env_params
@@ -93,7 +67,11 @@ class AVGLambda:
         transition = Transition(
             first=state.timestep,
             second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
-            aux={"log_prob": log_prob},
+            aux={
+                "log_prob": log_prob,
+                "sample_key": sample_key,
+                "next_action_key": next_action_key,
+            },
         )
 
         return (
@@ -111,71 +89,75 @@ class AVGLambda:
         )
 
     def _update_step(
-        self, state: AVGLambdaState, key: Key
-    ) -> tuple[AVGLambdaState, None]:
-        sample_key, step_key, next_action_key = jax.random.split(key, 3)
-
-        action, log_prob = self._sample_action(
-            state.actor_params, state.timestep.obs, sample_key
-        )
-        action = jax.lax.stop_gradient(action)
-        log_prob = jax.lax.stop_gradient(log_prob)
-
-        next_obs, env_state, reward, done, info = self.env.step(
-            step_key, state.env_state, action, self.env_params
-        )
-        reward = jnp.asarray(reward, dtype=jnp.float32)
-        done = jnp.asarray(done, dtype=jnp.bool_)
-        not_done = 1.0 - done.astype(jnp.float32)
+        self, state: AVGLambdaState, transition: Transition
+    ) -> AVGLambdaState:
+        log_prob = transition.aux["log_prob"]
+        sample_key = transition.aux["sample_key"]
+        next_action_key = transition.aux["next_action_key"]
 
         next_dist = self.actor_network.apply(
-            jax.lax.stop_gradient(state.actor_params), next_obs
+            jax.lax.stop_gradient(state.actor_params), transition.second.obs
         )
         next_action, next_log_prob = next_dist.sample_and_log_prob(
             seed=next_action_key
         )
         next_q_value = self.critic_network.apply(
-            jax.lax.stop_gradient(state.critic_params), next_obs, next_action
+            jax.lax.stop_gradient(state.critic_params),
+            transition.second.obs,
+            next_action,
         )
         next_value = next_q_value - self.cfg.alpha * next_log_prob
 
-        entropy_reward = reward - self.cfg.alpha * log_prob
-        td_scaler = state.td_scaler.update(entropy_reward, done, self.cfg.gamma)
+        entropy_reward = transition.second.reward - self.cfg.alpha * log_prob
+        td_scaler = state.td_scaler.update(
+            entropy_reward, transition.second.done, self.cfg.gamma
+        )
         sigma = td_scaler.sigma()
 
-        def get_q_value(params: PyTree, obs: Array, action: Array) -> Array:
-            q = self.critic_network.apply(params, obs, action)
-            return q
+        q_value, q_grads = jax.value_and_grad(
+            lambda params: self.critic_network.apply(
+                params, transition.first.obs, transition.second.action
+            )
+        )(state.critic_params)
+        td_error = (
+            transition.second.reward
+            + (1.0 - transition.second.done.astype(jnp.float32))
+            * self.cfg.gamma
+            * next_value
+            - q_value
+        ) / sigma
 
-        q_value, q_grads = jax.value_and_grad(get_q_value)(
-            state.critic_params, state.timestep.obs, action
-        )
-        td_error = (reward + not_done * self.cfg.gamma * next_value - q_value) / sigma
-
-        def compute_actor_loss(actor_params: PyTree, obs: Array, key: Key) -> Array:
-            dist = self.actor_network.apply(actor_params, obs)
-            sampled_action, sampled_log_prob = dist.sample_and_log_prob(seed=key)
+        def compute_actor_loss(actor_params):
+            dist = self.actor_network.apply(actor_params, transition.first.obs)
+            sampled_action, sampled_log_prob = dist.sample_and_log_prob(
+                seed=sample_key
+            )
             sampled_q = self.critic_network.apply(
-                jax.lax.stop_gradient(state.critic_params), obs, sampled_action
+                jax.lax.stop_gradient(state.critic_params),
+                transition.first.obs,
+                sampled_action,
             )
             return self.cfg.alpha * sampled_log_prob - sampled_q
 
         actor_loss, actor_grads = jax.value_and_grad(compute_actor_loss)(
-            state.actor_params, state.timestep.obs, sample_key
+            state.actor_params
         )
         actor_ascent = jax.tree.map(jnp.negative, actor_grads)
-        actor_td_error = jnp.float32(1.0)
         actor_updates, actor_optimizer_state = self.actor_optimizer.update(
-            state.actor_optimizer_state, actor_grads, actor_ascent, actor_td_error
+            state.actor_optimizer_state, actor_grads, actor_ascent, jnp.float32(1.0)
         )
         actor_params = jax.tree.map(
             lambda p, u: p + u, state.actor_params, actor_updates
         )
 
-        trace_decay = self.cfg.gamma * self.cfg.trace_lambda
-        keep = trace_decay * (1.0 - state.timestep.done.astype(jnp.float32))
         critic_trace = jax.tree.map(
-            lambda t, g: (keep * t + g).astype(t.dtype), state.critic_trace, q_grads
+            lambda trace, grad: self.cfg.gamma
+            * self.cfg.trace_lambda
+            * (1.0 - transition.first.done.astype(jnp.float32))
+            * trace
+            + grad,
+            state.critic_trace,
+            q_grads,
         )
 
         critic_updates, critic_optimizer_state = self.critic_optimizer.update(
@@ -185,28 +167,23 @@ class AVGLambda:
             lambda p, u: p + u, state.critic_params, critic_updates
         )
 
-        transition = Transition(
-            first=state.timestep,
-            second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
-        )
-
-        _, aux_actor_grads = jax.value_and_grad(self.aux_actor_loss)(
-            actor_params, transition
-        )
-        aux_actor_updates, aux_actor_optimizer_state = self.aux_actor_optimizer.update(
-            aux_actor_grads, state.aux_actor_optimizer_state, actor_params
-        )
-        actor_params = optax.apply_updates(actor_params, aux_actor_updates)
-
-        _, aux_critic_grads = jax.value_and_grad(self.aux_critic_loss)(
-            critic_params, transition
-        )
-        aux_critic_updates, aux_critic_optimizer_state = (
-            self.aux_critic_optimizer.update(
-                aux_critic_grads, state.aux_critic_optimizer_state, critic_params
+        if self.aux_actor_loss is not None:
+            aux_actor_grads = jax.grad(self.aux_actor_loss)(actor_params, transition)
+            actor_params = jax.tree.map(
+                lambda p, g: p - self.aux_actor_coefficient * g,
+                actor_params,
+                aux_actor_grads,
             )
-        )
-        critic_params = optax.apply_updates(critic_params, aux_critic_updates)
+
+        if self.aux_critic_loss is not None:
+            aux_critic_grads = jax.grad(self.aux_critic_loss)(
+                critic_params, transition
+            )
+            critic_params = jax.tree.map(
+                lambda p, g: p - self.aux_critic_coefficient * g,
+                critic_params,
+                aux_critic_grads,
+            )
 
         target = q_value + td_error
         explained_variance = 1 - jnp.var(td_error) / (jnp.var(target) + 1e-8)
@@ -223,27 +200,13 @@ class AVGLambda:
             }
         )
 
-        return (
-            state.replace(
-                step=state.step + 1,
-                update_step=state.update_step + 1,
-                timestep=Timestep(
-                    obs=next_obs,
-                    action=jnp.where(done, jnp.zeros_like(action), action),
-                    reward=jnp.where(done, jnp.zeros_like(reward), reward),
-                    done=done,
-                ),
-                env_state=env_state,
-                actor_params=actor_params,
-                actor_optimizer_state=actor_optimizer_state,
-                critic_params=critic_params,
-                critic_optimizer_state=critic_optimizer_state,
-                critic_trace=critic_trace,
-                td_scaler=td_scaler,
-                aux_actor_optimizer_state=aux_actor_optimizer_state,
-                aux_critic_optimizer_state=aux_critic_optimizer_state,
-            ),
-            None,
+        return state.replace(
+            actor_params=actor_params,
+            actor_optimizer_state=actor_optimizer_state,
+            critic_params=critic_params,
+            critic_optimizer_state=critic_optimizer_state,
+            critic_trace=critic_trace,
+            td_scaler=td_scaler,
         )
 
     def init(self, key: Key) -> AVGLambdaState:
@@ -260,14 +223,11 @@ class AVGLambda:
 
         actor_optimizer_state = self.actor_optimizer.init(actor_params)
         critic_optimizer_state = self.critic_optimizer.init(critic_params)
-        aux_actor_optimizer_state = self.aux_actor_optimizer.init(actor_params)
-        aux_critic_optimizer_state = self.aux_critic_optimizer.init(critic_params)
 
         critic_trace = jax.tree.map(jnp.zeros_like, critic_params)
 
         return AVGLambdaState(
             step=0,
-            update_step=0,
             timestep=timestep,
             env_state=env_state,
             actor_params=actor_params,
@@ -276,17 +236,18 @@ class AVGLambda:
             critic_optimizer_state=critic_optimizer_state,
             critic_trace=critic_trace,
             td_scaler=TDErrorScalerState.init(),
-            aux_actor_optimizer_state=aux_actor_optimizer_state,
-            aux_critic_optimizer_state=aux_critic_optimizer_state,
         )
 
-    def warmup(self, key: Key, state: AVGLambdaState, num_steps: int) -> AVGLambdaState:
-        return state
-
     def train(self, key: Key, state: AVGLambdaState, num_steps: int) -> AVGLambdaState:
-        keys = jax.random.split(key, num_steps)
+        def step(state, key):
+            state, transition = self._env_step(state, key, 1.0)
+            return self._update_step(state, transition), None
+
         state, _ = jax.lax.scan(
-            self._update_step, state, keys, unroll=self.cfg.unroll
+            step,
+            state,
+            jax.random.split(key, num_steps),
+            unroll=self.cfg.unroll,
         )
         return state
 
@@ -312,9 +273,9 @@ class AVGLambda:
             env_state=env_state,
         )
 
-        state, _ = jax.lax.scan(
-            partial(self._step, policy=self._deterministic_action),
-            state,
-            jax.random.split(eval_key, num_steps),
-        )
+        def step(state, key):
+            state, _ = self._env_step(state, key, 0.0)
+            return state, None
+
+        state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))
         return state

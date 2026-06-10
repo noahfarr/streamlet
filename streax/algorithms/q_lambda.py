@@ -5,7 +5,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-import optax
 from flax import core, struct
 
 from streax.optimizers import Optimizer
@@ -28,7 +27,6 @@ class QLambdaState:
     q_params: core.FrozenDict[str, Any]
     q_trace: PyTree
     q_optimizer_state: PyTree
-    aux_optimizer_state: PyTree
 
 
 @dataclass
@@ -40,11 +38,11 @@ class QLambda:
     epsilon_schedule: Callable
     q_optimizer: Optimizer
     aux_loss: Callable | None = None
-    aux_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
+    aux_coefficient: float = 1e-3
 
     def _env_step(
         self, state: QLambdaState, key: Key, epsilon: Array
-    ) -> tuple[QLambdaState, Transition, tuple]:
+    ) -> tuple[QLambdaState, Transition]:
         random_key, sample_key, step_key = jax.random.split(key, 3)
 
         action_space = self.env.action_space(self.env_params)
@@ -63,12 +61,9 @@ class QLambda:
         )
         greedy_action = jnp.argmax(q_values, axis=-1)
 
-        action = jnp.where(
-            jax.random.uniform(sample_key, ()) < epsilon, random_action, greedy_action
-        )
-        non_greedy = jax.random.uniform(sample_key, ()) < epsilon & (
-            random_action != greedy_action
-        )
+        explore = jax.random.uniform(sample_key, ()) < epsilon
+        action = jnp.where(explore, random_action, greedy_action)
+        non_greedy = explore & (random_action != greedy_action)
 
         next_obs, env_state, reward, done, info = self.env.step(
             step_key, state.env_state, action, self.env_params
@@ -79,10 +74,15 @@ class QLambda:
         transition = Transition(
             first=state.timestep,
             second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
-            aux={"non_greedy": non_greedy},
+            aux={
+                "non_greedy": non_greedy,
+                "q_values": q_values,
+                "intermediates": intermediates,
+                "q_vjp": q_vjp,
+            },
         )
 
-        lox.log({**info})
+        lox.log(info)
 
         return (
             state.replace(
@@ -96,16 +96,16 @@ class QLambda:
                 env_state=env_state,
             ),
             transition,
-            (q_values, intermediates, q_vjp),
         )
 
     def _update_step(
         self,
         state: QLambdaState,
         transition: Transition,
-        linearization: tuple,
     ) -> QLambdaState:
-        q_values, intermediates, q_vjp = linearization
+        q_values = transition.aux["q_values"]
+        intermediates = transition.aux["intermediates"]
+        q_vjp = transition.aux["q_vjp"]
         q_value = q_values[transition.second.action]
 
         num_actions = self.env.action_space(self.env_params).n
@@ -150,17 +150,15 @@ class QLambda:
 
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
-        aux_optimizer_state = state.aux_optimizer_state
         if self.aux_loss is not None:
             _, targets = self.q_network.apply(
                 state.q_params, transition.second.obs, mutable=["intermediates"]
             )
             cotangents = jax.grad(self.aux_loss)(intermediates, targets, transition)
             (aux_grads,) = q_vjp((jnp.zeros_like(q_values), cotangents))
-            aux_updates, aux_optimizer_state = self.aux_optimizer.update(
-                aux_grads, state.aux_optimizer_state, q_params
+            q_params = jax.tree.map(
+                lambda p, g: p - self.aux_coefficient * g, q_params, aux_grads
             )
-            q_params = optax.apply_updates(q_params, aux_updates)
 
         q_trace = jax.tree.map(
             lambda t: jnp.where(
@@ -182,7 +180,6 @@ class QLambda:
             q_params=q_params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
-            aux_optimizer_state=aux_optimizer_state,
         )
 
     def init(self, key: Key) -> QLambdaState:
@@ -197,28 +194,24 @@ class QLambda:
         q_params = self.q_network.init(q_key, obs)
 
         q_optimizer_state = self.q_optimizer.init(q_params)
-        aux_optimizer_state = self.aux_optimizer.init(q_params)
 
         q_trace = jax.tree.map(jnp.zeros_like, q_params)
 
-        state = dict(
+        return QLambdaState(
             step=0,
             timestep=timestep,
             env_state=env_state,
             q_params=q_params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
-            aux_optimizer_state=aux_optimizer_state,
         )
-
-        return QLambdaState(**state)
 
     def train(self, key: Key, state: QLambdaState, num_steps: int) -> QLambdaState:
         def step(state, key):
             epsilon = self.epsilon_schedule(state.step)
             lox.log({"training/epsilon": epsilon})
-            state, transition, linearization = self._env_step(state, key, epsilon)
-            return self._update_step(state, transition, linearization), None
+            state, transition = self._env_step(state, key, epsilon)
+            return self._update_step(state, transition), None
 
         state, _ = jax.lax.scan(
             step,
@@ -248,7 +241,7 @@ class QLambda:
         )
 
         def step(state, key):
-            state, _, _ = self._env_step(state, key, 0.0)
+            state, _ = self._env_step(state, key, 0.0)
             return state, None
 
         state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))
