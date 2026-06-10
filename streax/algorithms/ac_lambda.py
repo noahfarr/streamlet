@@ -46,6 +46,20 @@ class ACLambda:
     aux_actor_loss: Callable | None = None
     aux_critic_loss: Callable | None = None
 
+    def __post_init__(self):
+        assert 0.0 <= self.cfg.gamma <= 1.0, (
+            f"gamma must be in [0, 1], got {self.cfg.gamma}."
+        )
+        assert 0.0 <= self.cfg.trace_lambda <= 1.0, (
+            f"trace_lambda must be in [0, 1], got {self.cfg.trace_lambda}."
+        )
+        assert self.cfg.entropy_coefficient >= 0.0, (
+            f"entropy_coefficient must be >= 0, got {self.cfg.entropy_coefficient}."
+        )
+        assert self.cfg.unroll >= 1, (
+            f"unroll must be >= 1, got {self.cfg.unroll}."
+        )
+
     def _env_step(
         self, state: ACLambdaState, key: Key, temperature: Array
     ) -> tuple[ACLambdaState, Transition]:

@@ -10,7 +10,15 @@ from flax import core, struct
 from streax.optimizers import Optimizer
 from streax.utils import Timestep, Transition, TDErrorScalerState, canonicalize_dtype
 from streax.utils.axes import remove_feature_axis
-from streax.utils.typing import Array, Environment, EnvParams, EnvState, Key, PyTree
+from streax.utils.typing import (
+    Array,
+    Box,
+    Environment,
+    EnvParams,
+    EnvState,
+    Key,
+    PyTree,
+)
 
 
 @struct.dataclass(frozen=True)
@@ -46,6 +54,25 @@ class AVGLambda:
     aux_actor_loss: Callable | None = None
     aux_critic_loss: Callable | None = None
 
+    def __post_init__(self):
+        action_space = self.env.action_space(self.env_params)
+        assert isinstance(action_space, Box), (
+            "AVGLambda requires a continuous (Box) action space, got "
+            f"{type(action_space).__name__}."
+        )
+        assert 0.0 <= self.cfg.gamma <= 1.0, (
+            f"gamma must be in [0, 1], got {self.cfg.gamma}."
+        )
+        assert 0.0 <= self.cfg.trace_lambda <= 1.0, (
+            f"trace_lambda must be in [0, 1], got {self.cfg.trace_lambda}."
+        )
+        assert self.cfg.alpha >= 0.0, (
+            f"alpha (entropy temperature) must be >= 0, got {self.cfg.alpha}."
+        )
+        assert self.cfg.unroll >= 1, (
+            f"unroll must be >= 1, got {self.cfg.unroll}."
+        )
+
     def _env_step(
         self, state: AVGLambdaState, key: Key, temperature: Array
     ) -> tuple[AVGLambdaState, Transition]:
@@ -53,7 +80,7 @@ class AVGLambda:
 
         dist = self.actor_network.apply(state.actor_params, state.timestep.obs)
         action, log_prob = dist.sample_and_log_prob(seed=sample_key)
-        mode = dist.bijector.forward(dist.distribution.mode())
+        mode = dist.mode()
         action = jnp.where(temperature == 0.0, mode, action)
         log_prob = jnp.where(temperature == 0.0, dist.log_prob(mode), log_prob)
 

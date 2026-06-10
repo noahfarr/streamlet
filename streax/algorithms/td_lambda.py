@@ -39,6 +39,17 @@ class TDLambda:
     value_optimizer: Optimizer
     aux_loss: Callable | None = None
 
+    def __post_init__(self):
+        assert 0.0 <= self.cfg.gamma <= 1.0, (
+            f"gamma must be in [0, 1], got {self.cfg.gamma}."
+        )
+        assert 0.0 <= self.cfg.trace_lambda <= 1.0, (
+            f"trace_lambda must be in [0, 1], got {self.cfg.trace_lambda}."
+        )
+        assert self.cfg.unroll >= 1, (
+            f"unroll must be >= 1, got {self.cfg.unroll}."
+        )
+
     def _env_step(
         self, state: TDLambdaState, key: Key
     ) -> tuple[TDLambdaState, Transition]:

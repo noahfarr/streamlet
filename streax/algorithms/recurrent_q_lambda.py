@@ -9,7 +9,15 @@ from flax import core, struct
 
 from streax.optimizers import Optimizer
 from streax.utils import Timestep, Transition, canonicalize_dtype
-from streax.utils.typing import Array, Environment, EnvParams, EnvState, Key, PyTree
+from streax.utils.typing import (
+    Array,
+    Discrete,
+    Environment,
+    EnvParams,
+    EnvState,
+    Key,
+    PyTree,
+)
 
 
 @struct.dataclass(frozen=True)
@@ -39,6 +47,22 @@ class RecurrentQLambda:
     epsilon_schedule: Callable
     q_optimizer: Optimizer
     aux_loss: Callable | None = None
+
+    def __post_init__(self):
+        action_space = self.env.action_space(self.env_params)
+        assert isinstance(action_space, Discrete), (
+            "RecurrentQLambda requires a discrete action space, got "
+            f"{type(action_space).__name__}."
+        )
+        assert 0.0 <= self.cfg.gamma <= 1.0, (
+            f"gamma must be in [0, 1], got {self.cfg.gamma}."
+        )
+        assert 0.0 <= self.cfg.trace_lambda <= 1.0, (
+            f"trace_lambda must be in [0, 1], got {self.cfg.trace_lambda}."
+        )
+        assert self.cfg.unroll >= 1, (
+            f"unroll must be >= 1, got {self.cfg.unroll}."
+        )
 
     def _env_step(
         self, state: RecurrentQLambdaState, key: Key, epsilon: Array
