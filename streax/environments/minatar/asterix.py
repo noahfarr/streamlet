@@ -96,7 +96,7 @@ class Asterix(environment.Environment[EnvState, EnvParams]):
         # Check game condition & no. steps for termination condition
         state = state.replace(time=state.time + 1, terminal=done)
         done = self.is_terminal(state, params)
-        info = {"discount": self.discount(state, params)}
+        info = {}
         return (
             jax.lax.stop_gradient(self.get_obs(state)),
             jax.lax.stop_gradient(state),

@@ -102,7 +102,7 @@ class SpaceInvaders(environment.Environment[EnvState, EnvParams]):
             terminal=terminal,
         )
 
-        info = {"discount": 1 - done}
+        info = {}
         return (
             jax.lax.stop_gradient(self.get_obs(state)),
             jax.lax.stop_gradient(state),

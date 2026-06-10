@@ -107,7 +107,7 @@ class Seaquest(environment.Environment[EnvState, EnvParams]):
 
         state = state.replace(time=state.time + 1)
         done = self.is_terminal(state, params)
-        info = {"discount": self.discount(state, params)}
+        info = {}
         return (
             jax.lax.stop_gradient(self.get_obs(state, params)),
             jax.lax.stop_gradient(state),
