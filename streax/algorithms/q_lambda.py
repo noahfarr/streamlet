@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Callable
 
 import flax.linen as nn
@@ -24,7 +23,6 @@ class QLambdaConfig:
 @struct.dataclass(frozen=True)
 class QLambdaState:
     step: int
-    update_step: int
     timestep: Timestep
     env_state: EnvState
     q_params: core.FrozenDict[str, Any]
@@ -41,71 +39,36 @@ class QLambda:
     q_network: nn.Module
     epsilon_schedule: Callable
     q_optimizer: Optimizer
-    aux_loss: Callable = lambda params, transition: 0.0
+    aux_loss: Callable | None = None
     aux_optimizer: optax.GradientTransformation = optax.sgd(1e-3)
 
-    def _greedy_action(
-        self, key: Key, state: QLambdaState
-    ) -> tuple[QLambdaState, Array, dict]:
-        q_values, q_vjp = jax.vjp(
-            lambda params: self.q_network.apply(params, state.timestep.obs),
-            state.q_params,
-        )
-        action = jnp.argmax(q_values, axis=-1)
-        q_value = q_values[action]
-        num_actions = self.env.action_space(self.env_params).n
-        (q_grads,) = q_vjp(jax.nn.one_hot(action, num_actions, dtype=q_values.dtype))
-        aux = {
-            "non_greedy": jnp.bool_(False),
-            "q_value": q_value,
-            "q_grads": q_grads,
-        }
-        return state, action, aux
+    def _env_step(
+        self, state: QLambdaState, key: Key, epsilon: Array
+    ) -> tuple[QLambdaState, Transition, tuple]:
+        random_key, sample_key, step_key = jax.random.split(key, 3)
 
-    def _random_action(
-        self, key: Key, state: QLambdaState
-    ) -> tuple[QLambdaState, Array, dict]:
         action_space = self.env.action_space(self.env_params)
-        action = jax.random.randint(
-            key,
+        random_action = jax.random.randint(
+            random_key,
             action_space.shape,
             minval=0,
             maxval=action_space.n,
         )
-        aux = {"non_greedy": jnp.bool_(True)}
-        return state, action, aux
 
-    def _epsilon_greedy_action(
-        self, key: Key, state: QLambdaState
-    ) -> tuple[QLambdaState, Array, dict]:
-        random_key, sample_key = jax.random.split(key)
-        state, random_action, _ = self._random_action(random_key, state)
-
-        q_values, q_vjp = jax.vjp(
-            lambda params: self.q_network.apply(params, state.timestep.obs),
+        (q_values, intermediates), q_vjp = jax.vjp(
+            lambda params: self.q_network.apply(
+                params, state.timestep.obs, mutable=["intermediates"]
+            ),
             state.q_params,
         )
         greedy_action = jnp.argmax(q_values, axis=-1)
 
-        epsilon = self.epsilon_schedule(state.step)
-        is_random = jax.random.uniform(sample_key, ()) < epsilon
-        action = jnp.where(is_random, random_action, greedy_action)
-        non_greedy = is_random & (random_action != greedy_action)
-        q_value = q_values[action]
-        num_actions = self.env.action_space(self.env_params).n
-        (q_grads,) = q_vjp(jax.nn.one_hot(action, num_actions, dtype=q_values.dtype))
-        aux = {
-            "non_greedy": non_greedy,
-            "q_value": q_value,
-            "q_grads": q_grads,
-        }
-        return state, action, aux
-
-    def _step(
-        self, state: QLambdaState, key: Key, *, policy: Callable
-    ) -> tuple[QLambdaState, Transition]:
-        action_key, step_key = jax.random.split(key)
-        state, action, aux = policy(action_key, state)
+        action = jnp.where(
+            jax.random.uniform(sample_key, ()) < epsilon, random_action, greedy_action
+        )
+        non_greedy = jax.random.uniform(sample_key, ()) < epsilon & (
+            random_action != greedy_action
+        )
 
         next_obs, env_state, reward, done, info = self.env.step(
             step_key, state.env_state, action, self.env_params
@@ -116,8 +79,10 @@ class QLambda:
         transition = Transition(
             first=state.timestep,
             second=Timestep(obs=next_obs, action=action, reward=reward, done=done),
-            aux=aux,
+            aux={"non_greedy": non_greedy},
         )
+
+        lox.log({**info})
 
         return (
             state.replace(
@@ -131,42 +96,44 @@ class QLambda:
                 env_state=env_state,
             ),
             transition,
+            (q_values, intermediates, q_vjp),
         )
 
     def _update_step(
-        self, state: QLambdaState, key: Key, *, policy: Callable
-    ) -> tuple[QLambdaState, None]:
-        state, transition = self._step(state, key, policy=policy)
-        state = self._update(state, transition)
-        return state.replace(update_step=state.update_step + 1), None
-
-    def _update(
         self,
         state: QLambdaState,
         transition: Transition,
+        linearization: tuple,
     ) -> QLambdaState:
-        aux = transition.aux
-        non_greedy = aux["non_greedy"]
-        q_value = aux["q_value"]
-        q_grads = aux["q_grads"]
+        q_values, intermediates, q_vjp = linearization
+        q_value = q_values[transition.second.action]
 
-        reset = transition.second.done | non_greedy
-        discount = jnp.float32(self.cfg.gamma * self.cfg.trace_lambda)
+        num_actions = self.env.action_space(self.env_params).n
+        (q_grads,) = q_vjp(
+            (
+                jax.nn.one_hot(
+                    transition.second.action, num_actions, dtype=q_values.dtype
+                ),
+                jax.tree.map(jnp.zeros_like, intermediates),
+            )
+        )
 
-        q_trace = jax.tree.map(lambda t, g: discount * t + g, state.q_trace, q_grads)
+        q_trace = jax.tree.map(
+            lambda trace, grad: self.cfg.gamma * self.cfg.trace_lambda * trace + grad,
+            state.q_trace,
+            q_grads,
+        )
 
-        def get_next_q_value(params):
-            return self.q_network.apply(params, transition.second.obs).max(axis=-1)
-
-        not_done = 1.0 - transition.second.done.astype(jnp.float32)
         next_q_value, curvature = self.q_optimizer.bootstrap(
             state.q_optimizer_state,
             state.q_params,
             q_grads,
             q_trace,
-            get_next_q_value,
+            lambda params: self.q_network.apply(params, transition.second.obs).max(
+                axis=-1
+            ),
             self.cfg.gamma,
-            not_done,
+            1.0 - transition.second.done.astype(jnp.float32),
         )
         td_error = (
             transition.second.reward
@@ -183,32 +150,40 @@ class QLambda:
 
         q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
 
-        _, aux_grads = jax.value_and_grad(self.aux_loss)(q_params, transition)
-        aux_updates, aux_optimizer_state = self.aux_optimizer.update(
-            aux_grads, state.aux_optimizer_state, q_params
-        )
-        q_params = optax.apply_updates(q_params, aux_updates)
+        aux_optimizer_state = state.aux_optimizer_state
+        if self.aux_loss is not None:
+            _, targets = self.q_network.apply(
+                state.q_params, transition.second.obs, mutable=["intermediates"]
+            )
+            cotangents = jax.grad(self.aux_loss)(intermediates, targets, transition)
+            (aux_grads,) = q_vjp((jnp.zeros_like(q_values), cotangents))
+            aux_updates, aux_optimizer_state = self.aux_optimizer.update(
+                aux_grads, state.aux_optimizer_state, q_params
+            )
+            q_params = optax.apply_updates(q_params, aux_updates)
 
         q_trace = jax.tree.map(
-            lambda t: jnp.where(reset, jnp.zeros_like(t), t), q_trace
+            lambda t: jnp.where(
+                transition.second.done | transition.aux["non_greedy"],
+                jnp.zeros_like(t),
+                t,
+            ),
+            q_trace,
         )
 
         lox.log(
             {
                 "q_network/q_value": q_value.mean(),
                 "q_network/td_error": td_error.mean(),
-                "training/epsilon": self.epsilon_schedule(state.step),
             }
         )
 
-        new_state = dict(
+        return state.replace(
             q_params=q_params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
             aux_optimizer_state=aux_optimizer_state,
         )
-
-        return state.replace(**new_state)
 
     def init(self, key: Key) -> QLambdaState:
         env_key, q_key = jax.random.split(key)
@@ -228,7 +203,6 @@ class QLambda:
 
         state = dict(
             step=0,
-            update_step=0,
             timestep=timestep,
             env_state=env_state,
             q_params=q_params,
@@ -239,22 +213,17 @@ class QLambda:
 
         return QLambdaState(**state)
 
-    def warmup(self, key: Key, state: QLambdaState, num_steps: int) -> QLambdaState:
-        step_keys = jax.random.split(key, num_steps)
-        state, _ = jax.lax.scan(
-            partial(self._step, policy=self._random_action),
-            state,
-            step_keys,
-            unroll=self.cfg.unroll,
-        )
-        return state
-
     def train(self, key: Key, state: QLambdaState, num_steps: int) -> QLambdaState:
-        keys = jax.random.split(key, num_steps)
+        def step(state, key):
+            epsilon = self.epsilon_schedule(state.step)
+            lox.log({"training/epsilon": epsilon})
+            state, transition, linearization = self._env_step(state, key, epsilon)
+            return self._update_step(state, transition, linearization), None
+
         state, _ = jax.lax.scan(
-            partial(self._update_step, policy=self._epsilon_greedy_action),
+            step,
             state,
-            keys,
+            jax.random.split(key, num_steps),
             unroll=self.cfg.unroll,
         )
         return state
@@ -278,9 +247,9 @@ class QLambda:
             env_state=env_state,
         )
 
-        state, _ = jax.lax.scan(
-            partial(self._step, policy=self._greedy_action),
-            state,
-            jax.random.split(eval_key, num_steps),
-        )
+        def step(state, key):
+            state, _, _ = self._env_step(state, key, 0.0)
+            return state, None
+
+        state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))
         return state
