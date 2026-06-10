@@ -1,10 +1,3 @@
-"""Optimized SpaceInvaders-MinAtar, copied from gymnax.
-
-Dynamics, state layout and RNG stream match gymnax exactly. The only per-step
-hotspot, ``get_nearest_alien`` (an ``argsort`` plus a 10-iteration loop), is
-replaced with a single vectorized ``argmin``.
-"""
-
 from typing import Any
 
 import jax

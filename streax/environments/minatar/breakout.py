@@ -1,12 +1,3 @@
-"""JAX implementation of the Breakout MinAtar environment.
-
-Copied from gymnax's ``gymnax.environments.minatar.breakout``. The original is
-already scatter-light, so it is kept as-is for a self-contained ``minatar``
-namespace.
-
-Source: github.com/kenjyoung/MinAtar/blob/master/minatar/environments/breakout.py
-"""
-
 from typing import Any
 
 import jax
@@ -36,7 +27,6 @@ class EnvParams(environment.EnvParams):
 
 
 class Breakout(environment.Environment[EnvState, EnvParams]):
-    """JAX implementation of Breakout MinAtar environment."""
 
     def __init__(self, use_minimal_action_set: bool = True):
         super().__init__()

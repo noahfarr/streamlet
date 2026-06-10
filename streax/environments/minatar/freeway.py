@@ -1,11 +1,3 @@
-"""Optimized Freeway-MinAtar, copied from gymnax and vectorized.
-
-Dynamics, state layout and RNG stream match gymnax exactly; the per-car loops
-in ``get_obs`` / ``step_cars`` / ``randomize_cars`` are vectorized. Only the
-scalar agent-collision logic, which is genuinely sequential across cars, stays
-as a tiny ``lax.scan``.
-"""
-
 from typing import Any
 
 import jax
@@ -35,9 +27,7 @@ class Freeway(environment.Environment[EnvState, EnvParams]):
     def __init__(self, use_minimal_action_set: bool = True):
         super().__init__()
         self.obs_shape = (10, 10, 7)
-        # Full action set: ['n','l','u','r','d','f']
         self.full_action_set = jnp.array([0, 1, 2, 3, 4, 5])
-        # Minimal action set: ['n', 'u', 'd']
         self.minimal_action_set = jnp.array([0, 2, 4])
         if use_minimal_action_set:
             self.action_set = self.minimal_action_set
@@ -55,7 +45,6 @@ class Freeway(environment.Environment[EnvState, EnvParams]):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
-        """Perform single timestep state transition."""
         a = self.action_set[action]
         state, reward, win_cond = step_agent(a, state, params)
 

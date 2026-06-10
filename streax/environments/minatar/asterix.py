@@ -1,10 +1,3 @@
-"""Optimized Asterix-MinAtar, copied from gymnax and vectorized.
-
-Dynamics, state layout and RNG stream match gymnax exactly; the per-entity
-loops in ``get_obs`` / ``step_entities`` and the free-slot ``while_loop`` are
-replaced with vectorized equivalents.
-"""
-
 from typing import Any
 
 import jax

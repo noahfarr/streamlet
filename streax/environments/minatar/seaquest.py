@@ -1,12 +1,3 @@
-"""JAX port of the Seaquest MinAtar environment.
-
-Ported from the official MinAtar numpy reference
-(github.com/kenjyoung/MinAtar/blob/master/minatar/environments/seaquest.py).
-Dynamic entity lists are represented as fixed-capacity arrays with an active
-flag in the last column. Phases are applied in the same order as the official
-``act`` so the rules match; rare same-cell tie-breaks may differ.
-"""
-
 from typing import Any
 
 import jax
@@ -288,14 +279,20 @@ def step_agent(state: EnvState, action: jax.Array, params: EnvParams) -> EnvStat
     f_bullets = jax.lax.select(fire, _add(state.f_bullets, bullet), state.f_bullets)
     shot_timer = jax.lax.select(fire, params.shot_cool_down, state.shot_timer)
     return state.replace(
-        sub_x=sub_x, sub_y=sub_y, sub_or=sub_or, f_bullets=f_bullets, shot_timer=shot_timer
+        sub_x=sub_x,
+        sub_y=sub_y,
+        sub_or=sub_or,
+        f_bullets=f_bullets,
+        shot_timer=shot_timer,
     )
 
 
 def step_f_bullets(state: EnvState) -> tuple[EnvState, jax.Array]:
     fb = state.f_bullets
     active = fb[:, 3] != 0
-    new_x = jnp.where(active, jnp.where(fb[:, 2] != 0, fb[:, 0] + 1, fb[:, 0] - 1), fb[:, 0])
+    new_x = jnp.where(
+        active, jnp.where(fb[:, 2] != 0, fb[:, 0] + 1, fb[:, 0] - 1), fb[:, 0]
+    )
     oob = jnp.logical_and(active, jnp.logical_or(new_x < 0, new_x > 9))
     active = jnp.logical_and(active, jnp.logical_not(oob))
     fy = fb[:, 1]
@@ -349,7 +346,9 @@ def step_divers(state: EnvState, params: EnvParams) -> EnvState:
     active = jnp.logical_and(active, jnp.logical_not(picked_pre))
 
     move_cond = jnp.logical_and(active, mt == 0)
-    new_mt = jnp.where(active, jnp.where(mt == 0, params.diver_move_interval, mt - 1), mt)
+    new_mt = jnp.where(
+        active, jnp.where(mt == 0, params.diver_move_interval, mt - 1), mt
+    )
     new_x = jnp.where(move_cond, jnp.where(lr != 0, x + 1, x - 1), x)
     oob = jnp.logical_and(move_cond, jnp.logical_or(new_x < 0, new_x > 9))
     active = jnp.logical_and(active, jnp.logical_not(oob))
@@ -360,11 +359,20 @@ def step_divers(state: EnvState, params: EnvParams) -> EnvState:
     picked_post, dc = _pickup(active, at_sub_post, dc)
     active = jnp.logical_and(active, jnp.logical_not(picked_post))
 
-    d = d.at[:, 0].set(new_x).at[:, 3].set(new_mt).at[:, 4].set(active.astype(jnp.int32))
+    d = (
+        d.at[:, 0]
+        .set(new_x)
+        .at[:, 3]
+        .set(new_mt)
+        .at[:, 4]
+        .set(active.astype(jnp.int32))
+    )
     return state.replace(divers=d, diver_count=dc)
 
 
-def step_e_subs(state: EnvState, reward: jax.Array, params: EnvParams) -> tuple[EnvState, jax.Array]:
+def step_e_subs(
+    state: EnvState, reward: jax.Array, params: EnvParams
+) -> tuple[EnvState, jax.Array]:
     s = state.e_subs
     active = s[:, 5] != 0
     x, y, lr, mt, st = s[:, 0], s[:, 1], s[:, 2], s[:, 3], s[:, 4]
@@ -397,7 +405,9 @@ def step_e_subs(state: EnvState, reward: jax.Array, params: EnvParams) -> tuple[
     new_active = jnp.logical_and(active, jnp.logical_not(removed))
 
     shoot = jnp.logical_and(jnp.logical_and(active, st == 0), jnp.logical_not(oob))
-    new_st = jnp.where(active, jnp.where(st == 0, params.enemy_shot_interval, st - 1), st)
+    new_st = jnp.where(
+        active, jnp.where(st == 0, params.enemy_shot_interval, st - 1), st
+    )
 
     e_bullets = state.e_bullets
     idx = jnp.arange(s.shape[0])
@@ -408,21 +418,36 @@ def step_e_subs(state: EnvState, reward: jax.Array, params: EnvParams) -> tuple[
     def add_bullet(eb, i):
         row = jnp.array([new_x[i], y[i], lr[i], 1])
         target = jnp.argmax(jnp.logical_and(free, free_csum == shoot_csum[i]))
-        return jax.lax.select(
-            jnp.logical_and(shoot[i], jnp.logical_and(free, free_csum == shoot_csum[i]).any()),
-            eb.at[target].set(row),
-            eb,
-        ), None
+        return (
+            jax.lax.select(
+                jnp.logical_and(
+                    shoot[i], jnp.logical_and(free, free_csum == shoot_csum[i]).any()
+                ),
+                eb.at[target].set(row),
+                eb,
+            ),
+            None,
+        )
 
     e_bullets, _ = jax.lax.scan(add_bullet, e_bullets, idx)
 
-    s = s.at[:, 0].set(new_x).at[:, 3].set(new_mt).at[:, 4].set(new_st).at[:, 5].set(
-        new_active.astype(jnp.int32)
+    s = (
+        s.at[:, 0]
+        .set(new_x)
+        .at[:, 3]
+        .set(new_mt)
+        .at[:, 4]
+        .set(new_st)
+        .at[:, 5]
+        .set(new_active.astype(jnp.int32))
     )
     fb = fb.at[:, 3].set(
         jnp.logical_and(fb_active, jnp.logical_not(fb_die)).astype(jnp.int32)
     )
-    return state.replace(e_subs=s, f_bullets=fb, e_bullets=e_bullets, terminal=terminal), reward
+    return (
+        state.replace(e_subs=s, f_bullets=fb, e_bullets=e_bullets, terminal=terminal),
+        reward,
+    )
 
 
 def step_e_bullets(state: EnvState) -> EnvState:
@@ -475,8 +500,13 @@ def step_e_fish(state: EnvState, reward: jax.Array) -> tuple[EnvState, jax.Array
 
     removed = jnp.logical_or(oob, fish_collide)
     new_active = jnp.logical_and(active, jnp.logical_not(removed))
-    f = f.at[:, 0].set(new_x).at[:, 3].set(new_mt).at[:, 4].set(
-        new_active.astype(jnp.int32)
+    f = (
+        f.at[:, 0]
+        .set(new_x)
+        .at[:, 3]
+        .set(new_mt)
+        .at[:, 4]
+        .set(new_active.astype(jnp.int32))
     )
     fb = fb.at[:, 3].set(
         jnp.logical_and(fb_active, jnp.logical_not(fb_die)).astype(jnp.int32)
@@ -484,7 +514,9 @@ def step_e_fish(state: EnvState, reward: jax.Array) -> tuple[EnvState, jax.Array
     return state.replace(e_fish=f, f_bullets=fb, terminal=terminal), reward
 
 
-def step_timers(state: EnvState, reward: jax.Array, params: EnvParams) -> tuple[EnvState, jax.Array]:
+def step_timers(
+    state: EnvState, reward: jax.Array, params: EnvParams
+) -> tuple[EnvState, jax.Array]:
     e_spawn_timer = state.e_spawn_timer - (state.e_spawn_timer > 0)
     d_spawn_timer = state.d_spawn_timer - (state.d_spawn_timer > 0)
     shot_timer = state.shot_timer - (state.shot_timer > 0)
@@ -510,11 +542,15 @@ def step_timers(state: EnvState, reward: jax.Array, params: EnvParams) -> tuple[
     )
     espawn_dec = jnp.logical_and(ramp_cond, state.e_spawn_speed > 1)
 
-    oxygen = jnp.where(above, state.oxygen - 1, jnp.where(do_surface, params.max_oxygen, state.oxygen))
+    oxygen = jnp.where(
+        above, state.oxygen - 1, jnp.where(do_surface, params.max_oxygen, state.oxygen)
+    )
     surface = jnp.where(above, 0, 1)
     diver_count = jnp.where(do_surface, diver_after, state.diver_count)
     move_speed = jnp.where(do_surface, state.move_speed - move_dec, state.move_speed)
-    e_spawn_speed = jnp.where(do_surface, state.e_spawn_speed - espawn_dec, state.e_spawn_speed)
+    e_spawn_speed = jnp.where(
+        do_surface, state.e_spawn_speed - espawn_dec, state.e_spawn_speed
+    )
     ramp_index = jnp.where(do_surface, state.ramp_index + ramp_cond, state.ramp_index)
     reward = reward + jnp.where(do_surface, surface_r, 0)
 
