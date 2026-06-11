@@ -127,9 +127,9 @@ class SpaceInvaders(environment.Environment[EnvState, EnvParams]):
 
     def get_obs(self, state: EnvState, params=None, key=None) -> jax.Array:
         """Return observation from raw state trafo."""
-        obs = jnp.zeros((10, 10, 6), dtype=bool)
+        obs = jnp.zeros((10, 10, 6), dtype=jnp.float32)
         # Update cannon, aliens - left + right dir, friendly + enemy bullet
-        obs = obs.at[9, state.pos, 0].set(1)
+        obs = obs.at[9, state.pos, 0].set(1.0)
         obs = obs.at[:, :, 1].set(state.alien_map)
         left_dir_cond = state.alien_dir < 0
         obs = jax.lax.select(
@@ -139,7 +139,7 @@ class SpaceInvaders(environment.Environment[EnvState, EnvParams]):
         )
         obs = obs.at[:, :, 4].set(state.f_bullet_map)
         obs = obs.at[:, :, 5].set(state.e_bullet_map)
-        return obs.astype(jnp.float32)
+        return obs
 
     def is_terminal(self, state: EnvState, params: EnvParams) -> jax.Array:
         capped = jnp.logical_and(

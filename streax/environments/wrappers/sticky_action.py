@@ -15,6 +15,13 @@ class StickyActionWrapperState:
     previous_action: Array
     env_state: environment.EnvState
 
+    def __getattr__(self, name):
+        return getattr(self.env_state, name)
+
+    @property
+    def unwrapped(self):
+        return getattr(self.env_state, "unwrapped", self.env_state)
+
 
 class StickyActionWrapper(GymnaxWrapper):
     def __init__(self, env, sticky_action_probability: float = 0.1):

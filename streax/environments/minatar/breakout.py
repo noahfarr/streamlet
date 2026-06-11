@@ -84,12 +84,12 @@ class Breakout(environment.Environment[EnvState, EnvParams]):
         return self.get_obs(state), state
 
     def get_obs(self, state: EnvState, params=None, key=None) -> jax.Array:
-        obs = jnp.zeros(self.obs_shape, dtype=bool)
-        obs = obs.at[9, state.pos, 0].set(1)
-        obs = obs.at[state.ball_y, state.ball_x, 1].set(1)
-        obs = obs.at[state.last_y, state.last_x, 2].set(1)
+        obs = jnp.zeros(self.obs_shape, dtype=jnp.float32)
+        obs = obs.at[9, state.pos, 0].set(1.0)
+        obs = obs.at[state.ball_y, state.ball_x, 1].set(1.0)
+        obs = obs.at[state.last_y, state.last_x, 2].set(1.0)
         obs = obs.at[:, :, 3].set(state.brick_map)
-        return obs.astype(jnp.float32)
+        return obs
 
     def is_terminal(self, state: EnvState, params: EnvParams) -> jax.Array:
         capped = jnp.logical_and(

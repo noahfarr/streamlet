@@ -18,6 +18,13 @@ class RecordEpisodeStatisticsState:
     returned_discounted_episode_returns: float
     returned_episode_lengths: int
 
+    def __getattr__(self, name):
+        return getattr(self.env_state, name)
+
+    @property
+    def unwrapped(self):
+        return getattr(self.env_state, "unwrapped", self.env_state)
+
 
 class RecordEpisodeStatistics:
     def __init__(self, env, gamma: float = 0.99):

@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Any, Union
 
 import jax.numpy as jnp
 import lox
@@ -15,6 +15,13 @@ class NormalizeObservationWrapperState:
     M2: Array
     count: float
     env_state: environment.EnvState
+
+    @property
+    def unwrapped(self):
+        return getattr(self.env_state, "unwrapped", self.env_state)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.env_state, name)
 
 
 class NormalizeObservationWrapper(GymnaxWrapper):
