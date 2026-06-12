@@ -25,7 +25,7 @@ from streax.utils.typing import (
 class SoftQLambdaConfig:
     gamma: float
     trace_lambda: float
-    tau: float = 0.03  # entropy temperature of the soft Bellman backup
+    tau: float = 0.03
     unroll: int = struct.field(pytree_node=False, default=2)
 
 
@@ -164,7 +164,6 @@ class SoftQLambda:
             q_grads,
         )
 
-        # Soft bootstrap: v_tau(s') = tau * logsumexp(Q(s',.)/tau).
         next_value, curvature = self.q_optimizer.bootstrap(
             state.q_optimizer_state,
             state.q_params,
@@ -206,7 +205,6 @@ class SoftQLambda:
             (aux_grads,) = q_vjp((jnp.zeros_like(q_values), cotangents))
             q_params = jax.tree.map(lambda p, g: p - g, q_params, aux_grads)
 
-        # Watkins-style trace cut on termination or exploratory (off-policy) steps.
         q_trace = jax.tree.map(
             lambda t: jnp.where(
                 transition.second.done | transition.aux["non_greedy"],

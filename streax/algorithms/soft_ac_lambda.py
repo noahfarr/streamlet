@@ -17,24 +17,10 @@ from streax.utils.typing import Array, Environment, EnvParams, EnvState, Key, Py
 class SoftACLambdaConfig:
     gamma: float
     trace_lambda: float
-    # Soft-value entropy temperature: the reward is augmented with
-    # ``tau * H(pi(.|s))`` so the critic learns the entropy-regularized
-    # (maximum-entropy) value. ``tau = 0`` recovers plain AC(lambda).
     tau: float = 0.1
-    # Actor-side entropy-gradient bonus (the existing AC(lambda) exploration term).
     entropy_coefficient: float = 0.01
-    # Target-entropy controller (SAC-style automatic temperature). When
-    # ``target_entropy_ratio > 0`` the temperature alpha (initialized at ``tau``)
-    # is adapted online toward ``target = ratio * ln(num_actions)`` via
-    # ``log_alpha += temperature_lr * (target - H)``, and alpha drives BOTH the
-    # soft reward bonus and the actor entropy gradient — a restoring force that
-    # grows as entropy collapses instead of fading with it. ``ratio = 0``
-    # disables the controller and recovers the fixed-coefficient behavior.
     target_entropy_ratio: float = 0.0
     temperature_lr: float = 1e-4
-    # Anti-windup clamp on the adaptive temperature: keeps the entropy bonus on
-    # the scale of the (normalized) environment reward even when the controller
-    # cannot reach its setpoint.
     max_temperature: float = 1.0
     unroll: int = struct.field(pytree_node=False, default=4)
 
@@ -197,10 +183,6 @@ class SoftACLambda:
             self.cfg.gamma,
             1.0 - transition.second.done.astype(jnp.float32),
         )
-        # Soft reward: add alpha * H(pi(.|s)) so the critic learns the
-        # entropy-regularized value (entropy is at the current state, detached).
-        # alpha is the (possibly adaptive) temperature; with the controller off
-        # it stays fixed at tau.
         temperature = jnp.exp(state.log_temperature)
         soft_reward = transition.second.reward + temperature * entropy
         td_error = (
@@ -209,9 +191,6 @@ class SoftACLambda:
             - remove_feature_axis(critic_value)
         )
 
-        # With the controller on, the adaptive temperature also drives the actor
-        # entropy gradient (so the restoring force grows as entropy collapses);
-        # otherwise keep the fixed entropy_coefficient.
         controller_on = self.cfg.target_entropy_ratio > 0.0
         entropy_scale = jnp.where(
             controller_on, temperature, self.cfg.entropy_coefficient
@@ -300,9 +279,6 @@ class SoftACLambda:
             critic_trace,
         )
 
-        # Target-entropy controller: integrate log-alpha toward the setpoint.
-        # When entropy is below target, alpha grows (more exploration pressure);
-        # above target, it shrinks. A no-op when the controller is off.
         target_entropy = self.cfg.target_entropy_ratio * self.max_entropy
         log_temperature = jnp.where(
             controller_on,
