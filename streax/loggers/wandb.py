@@ -67,16 +67,19 @@ class WandbLogger:
         }
 
     def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
-        """Replay a per-timestep sequence into each seed's run.
+        """Replay per-timestep sequences into each seed's run.
 
-        Every leaf is expected to have shape ``(num_seeds, T, *rest)``; the
-        trailing ``*rest`` axes (e.g. the env axis) are reduced with ``nanmean``
-        to ``(num_seeds, T)``. ``steps`` is a length-``T`` array of absolute
-        global step indices. ``NaN`` marks "no datapoint" for a key at a given
-        ``(seed, step)`` and is skipped, so sparse episode metrics and dense
-        loss metrics can share one grid. wandb batches the uploads internally.
+        Leaves may have *different* lengths along their time axis: each leaf is
+        treated as a uniform sequence spanning the same global-step interval
+        ``[steps[0], steps[-1]]`` and its points are placed evenly across it, so
+        env-rate episode metrics and update-rate loss metrics coexist without a
+        shared grid. Trailing ``*rest`` axes are reduced with ``nanmean``;
+        ``NaN`` marks "no datapoint" and is skipped. Points from different leaves
+        landing on the same global step are merged into one row. wandb batches
+        the uploads internally.
         """
         steps = np.asarray(jax.device_get(steps)).reshape(-1)
+        start, span = int(steps[0]), int(steps[-1]) - int(steps[0])
         with warnings.catch_warnings():
             # all-NaN env slices (steps with no finished episode) -> NaN, skipped below
             warnings.simplefilter("ignore", RuntimeWarning)
@@ -88,14 +91,15 @@ class WandbLogger:
                 for path, leaf in jax.tree_util.tree_leaves_with_path(data)
             }
         for seed, run in self.runs.items():
-            for t, step in enumerate(steps):
-                row = {
-                    k: float(v[seed, t])
-                    for k, v in data.items()
-                    if np.isfinite(v[seed, t])
-                }
-                if row:
-                    run.log(row, step=int(step))
+            rows: dict[int, dict] = {}
+            for k, v in data.items():
+                length = v.shape[1]
+                grid = start + (np.arange(length) + 1) * span // length
+                for t, step in enumerate(grid):
+                    if np.isfinite(v[seed, t]):
+                        rows.setdefault(int(step), {})[k] = float(v[seed, t])
+            for step in sorted(rows):
+                run.log(rows[step], step=step)
 
     def finish(self) -> None:
         for run in self.runs.values():
