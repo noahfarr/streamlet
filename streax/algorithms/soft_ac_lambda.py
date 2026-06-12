@@ -73,7 +73,6 @@ class SoftACLambda:
             f"entropy_coefficient must be >= 0, got {self.cfg.entropy_coefficient}."
         )
         assert self.cfg.unroll >= 1, f"unroll must be >= 1, got {self.cfg.unroll}."
-        # Maximum policy entropy, used as the scale for the entropy target.
         action_space = self.env.action_space(self.env_params)
         self.max_entropy = (
             float(jnp.log(action_space.n)) if hasattr(action_space, "n") else 1.0
