@@ -41,18 +41,6 @@ class SoftQLambdaState:
 
 @dataclass
 class SoftQLambda:
-    """Streaming soft Q(lambda).
-
-    Entropy-regularized (maximum-entropy) Q-learning with eligibility traces and
-    ObGD. The only change vs. :class:`QLambda` is the bootstrap value: instead of
-    the hard ``max_a Q(s',a)`` it uses the soft value
-
-        v_tau(s') = tau * logsumexp(Q(s',.) / tau),
-
-    the value of the Boltzmann policy ``pi_tau = softmax(Q(s',.)/tau)``. As
-    ``tau -> 0`` this recovers the hard max (standard Q(lambda)).
-    """
-
     cfg: SoftQLambdaConfig
     env: Environment
     env_params: EnvParams
@@ -77,7 +65,6 @@ class SoftQLambda:
         assert self.cfg.unroll >= 1, f"unroll must be >= 1, got {self.cfg.unroll}."
 
     def _soft_value(self, q_values: Array) -> Array:
-        """Soft value ``v_tau(s) = tau * logsumexp(Q(s,.) / tau)``."""
         return self.cfg.tau * logsumexp(q_values / self.cfg.tau, axis=-1)
 
     def _env_step(

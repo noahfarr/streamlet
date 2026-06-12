@@ -41,16 +41,6 @@ class SoftACLambdaState:
 
 @dataclass
 class SoftACLambda:
-    """Streaming soft actor-critic, AC(lambda) form.
-
-    Maximum-entropy AC(lambda) with eligibility traces and ObGD. The change vs.
-    :class:`ACLambda` is that the per-step reward is augmented with
-    ``tau * H(pi(.|s))``, so the critic learns the entropy-regularized soft value
-    ``V(s) = E[sum_t gamma^t (r_t + tau * H(pi(.|s_t)))]`` and the augmented TD
-    error drives both actor and critic. The actor keeps its entropy-gradient
-    bonus (``entropy_coefficient``). ``tau = 0`` recovers plain AC(lambda).
-    """
-
     cfg: SoftACLambdaConfig
     env: Environment
     env_params: EnvParams
