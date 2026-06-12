@@ -26,10 +26,12 @@ class DashboardLogger:
         refresh_per_second=10,
         summary=None,
         title=None,
+        max_rows=12,
         **kwargs,
     ):
         self.summary = summary or {}
         self.title = title
+        self.max_rows = max_rows
 
         self.console = Console()
 
@@ -112,7 +114,14 @@ class DashboardLogger:
         table = Table(box=None, expand=True)
         table.add_column(heading, justify="left", width=20, style="yellow")
         table.add_column("Value", justify="right", width=10, style="green")
-        for name, value in metrics.items():
+        items = list(metrics.items())
+        cap = self.max_rows
+        hidden = 0
+        if cap and len(items) > cap:
+            items = sorted(items, key=lambda kv: -abs(float(jnp.mean(kv[1]))))
+            hidden = len(items) - (cap - 1)
+            items = items[: cap - 1]
+        for name, value in items:
             mean, std = jnp.mean(value), jnp.std(value)
             if 0 < abs(mean) < 0.001:
                 fmt = ".3e"
@@ -122,6 +131,8 @@ class DashboardLogger:
                 fmt = ".3f"
             value_str = f"{mean:{fmt}} ± {std:{fmt}}" if std != 0 else f"{mean:{fmt}}"
             table.add_row(name, value_str)
+        if hidden:
+            table.add_row(f"(+{hidden} more)", "", style="dim")
         return table
 
     def build_dashboard(
