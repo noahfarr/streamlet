@@ -101,6 +101,23 @@ class WandbLogger:
             for step in sorted(rows):
                 run.log(rows[step], step=step)
 
+    def log_artifact(self, state: PyTree, step: int, **kwargs) -> None:
+        import os
+        import tempfile
+
+        import orbax.checkpoint as ocp
+
+        checkpointer = ocp.StandardCheckpointer()
+        for seed, run in self.runs.items():
+            seed_state = jax.tree.map(lambda x: x[seed], state)
+            with tempfile.TemporaryDirectory() as directory:
+                path = os.path.join(directory, "model")
+                checkpointer.save(path, seed_state)
+                checkpointer.wait_until_finished()
+                artifact = wandb.Artifact(f"model-{run.id}", type="model")
+                artifact.add_dir(path, name="model")
+                run.log_artifact(artifact)
+
     def finish(self) -> None:
         for run in self.runs.values():
             run.finish()
