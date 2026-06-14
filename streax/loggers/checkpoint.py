@@ -6,7 +6,24 @@ from streax.utils.typing import PyTree
 
 
 class CheckpointLogger:
-    def __init__(self, directory: str, max_to_keep: int = 1, best_mode: str = "max"):
+    def __init__(
+        self,
+        directory: str | None = None,
+        max_to_keep: int = 1,
+        best_mode: str = "max",
+        cfg=None,
+        **kwargs,
+    ):
+        if directory is None:
+            out_dir = (cfg or {}).get("resume")
+            if out_dir is None:
+                try:
+                    from hydra.core.hydra_config import HydraConfig
+
+                    out_dir = HydraConfig.get().runtime.output_dir
+                except Exception:
+                    out_dir = "."
+            directory = os.path.join(out_dir, "checkpoints")
         self.latest = ocp.CheckpointManager(
             os.path.join(directory, "latest"),
             options=ocp.CheckpointManagerOptions(max_to_keep=max_to_keep),
