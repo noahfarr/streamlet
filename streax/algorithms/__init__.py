@@ -14,6 +14,11 @@ from .recurrent_q_lambda import (
     RecurrentQLambdaConfig,
     RecurrentQLambdaState,
 )
+from .recurrent_qrc_lambda import (
+    RecurrentQRCLambda,
+    RecurrentQRCLambdaConfig,
+    RecurrentQRCLambdaState,
+)
 from .recurrent_td_lambda import (
     RecurrentTDLambda,
     RecurrentTDLambdaConfig,
