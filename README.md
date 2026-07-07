@@ -15,11 +15,11 @@ Most deep RL is built around large replay buffers and big batched updates. `Stre
 
 | | Details |
 |---|---|
-| 🤖 **Algorithms** | [Q(λ)](https://arxiv.org/abs/2410.14606), [AC(λ)](https://arxiv.org/abs/2410.14606), [SARSA(λ)](https://arxiv.org/abs/2410.14606), [TD(λ)](https://arxiv.org/abs/2410.14606), [QRC(λ)](https://arxiv.org/abs/2507.09087), and [AVG(λ)](https://arxiv.org/abs/2411.15370) — all online, with eligibility traces and no replay buffer |
-| ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606), [`AdaptiveQ`](https://arxiv.org/abs/2605.06764), [`Implicit`](https://arxiv.org/abs/2505.01361), [`Intentional`](https://arxiv.org/abs/2604.19033), and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
-| 🎮 **Environments** | [Gymnax](https://github.com/RobertTLange/gymnax), [Brax](https://github.com/google/brax), [ALE](https://github.com/Farama-Foundation/Arcade-Learning-Environment), [Gymnasium](https://github.com/Farama-Foundation/Gymnasium), and the built-in [ETT](https://github.com/zhouhaoyi/ETDataset) time-series prediction dataset behind a single `make("namespace::env_id")` entry point |
+| 🤖 **Algorithms** | [Q(λ)](https://arxiv.org/abs/2410.14606), [AC(λ)](https://arxiv.org/abs/2410.14606), [SARSA(λ)](https://arxiv.org/abs/2410.14606), [TD(λ)](https://arxiv.org/abs/2410.14606), [QRC(λ)](https://arxiv.org/abs/2507.09087), [AVG(λ)](https://arxiv.org/abs/2411.15370), soft (entropy-regularized) Q(λ)/AC(λ), and recurrent Q(λ)/AC(λ)/QRC(λ)/TD(λ) for POMDPs — all online, with eligibility traces and no replay buffer |
+| ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606), [`Adaptive`](https://arxiv.org/abs/2605.06764), [`Implicit`](https://arxiv.org/abs/2505.01361), [`Intentional`](https://arxiv.org/abs/2604.19033), `Calibrated`, `AlphaBound`, and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
+| 🎮 **Environments** | [Gymnax](https://github.com/RobertTLange/gymnax), [Brax](https://github.com/google/brax), [ALE](https://github.com/Farama-Foundation/Arcade-Learning-Environment), [Gymnasium](https://github.com/Farama-Foundation/Gymnasium), [Craftax](https://github.com/MichaelTMatthews/Craftax), [PufferLib](https://github.com/PufferAI/PufferLib), a native MinAtar reimplementation, an Animax prediction-benchmark namespace, and the built-in [ETT](https://github.com/zhouhaoyi/ETDataset) time-series prediction dataset — all behind a single `make("namespace::env_id")` entry point |
 | 🧰 **Wrappers** | Observation / reward normalization, observation traces, episode-statistics recording, sticky actions |
-| 📊 **Logging** | In-graph structured logging via [`lox`](https://github.com/huterguier/lox) |
+| 📊 **Logging** | In-graph structured logging via [`lox`](https://github.com/huterguier/lox), plus `streamlet.loggers` for a live terminal dashboard, Weights & Biases, and checkpointing |
 
 <h2> 📥 Installation</h2>
 
@@ -47,20 +47,20 @@ import jax
 import jax.numpy as jnp
 from streamlet.algorithms import QLambda, QLambdaConfig
 from streamlet.environments import environment
-from streamlet.networks import Flatten, heads, sparse
+from streamlet.networks import Flatten, sparse
 from streamlet.optimizers import ObGD, ObGDConfig
 
 env, env_params = environment.make("gymnax::Breakout-MinAtar")
 num_actions = env.action_space(env_params).n
 
-cfg = QLambdaConfig(num_envs=1, gamma=0.99, trace_lambda=0.8)
+cfg = QLambdaConfig(gamma=0.99, trace_lambda=0.8)
 
 sparse_init = sparse(sparsity=0.9)
 q_network = nn.Sequential([
     nn.Conv(16, (3, 3), padding="VALID", kernel_init=sparse_init), nn.LayerNorm(), nn.leaky_relu,
     Flatten(start_dim=-3),
     nn.Dense(128, kernel_init=sparse_init), nn.LayerNorm(), nn.leaky_relu,
-    heads.DiscreteQNetwork(action_dim=num_actions, kernel_init=sparse_init),
+    nn.Dense(num_actions, kernel_init=sparse_init),
 ])
 
 optimizer = ObGD(ObGDConfig(lr=1.0, kappa=2.0))
@@ -74,50 +74,19 @@ key, train_key = jax.random.split(key)
 state = agent.train(train_key, state, num_steps=100_000)
 ```
 
-Every algorithm exposes the same interface: `init` → `warmup` (optional) → `train` → `evaluate`. See `examples/` for complete scripts with logging and evaluation.
-
-<h2> 🖥️ Launching on a cluster</h2>
-
-`scripts/launch.py` submits an example script to SLURM as an array job (one task per env-id, and per `--eta` for examples that take it) via [`slurmpilot`](https://github.com/geoalgo/slurmpilot). You run it from your laptop; slurmpilot ships the repo to the cluster over SSH and calls `sbatch` there. The upload is filtered by this repo's `.gitignore`, so `.venv/` and `wandb/` are not copied.
-
-Install the launch tooling (pulled from the fork that adds `.gitignore`-aware uploads), then point slurmpilot at your cluster:
-
-```bash
-uv sync --extra cluster
-
-mkdir -p ~/slurmpilot/config/clusters
-cp scripts/slurmpilot/general.yaml      ~/slurmpilot/config/general.yaml
-cp scripts/slurmpilot/clusters/ias.yaml ~/slurmpilot/config/clusters/ias.yaml
-# edit ~/slurmpilot/config/clusters/ias.yaml and set `host:` (and `user:`)
-```
-
-Then launch (use `--dry-run` first to print the sweep and inspect the generated `slurm_script.sh` without submitting):
-
-```bash
-# Calibrated eta sweep across the 4 MinAtar envs on CPU, with wandb (the old launch.sh default)
-uv run python scripts/launch.py
-
-# A different example on GPU, no eta sweep, no wandb
-uv run python scripts/launch.py --example stream_q_minatar --device gpu --no-wandb
-
-# MinAtar Q-learning across ALL optimizers (ObGD, Calibrated, Implicit, Intentional, AdaptiveQ),
-# one array job per optimizer
-uv run python scripts/minatar.py
-```
-
-Each node runs `uv sync --frozen` against the shipped `uv.lock` before training. If your compute nodes have no internet, override the setup step to use a pre-built environment, e.g. `--setup 'source ~/streamlet-env/bin/activate'`.
+Every algorithm exposes the same interface: `init` → `train` → `evaluate`, all `jit`/`vmap`-compatible so you can parallelize across seeds with `jax.vmap`. See `examples/` for complete scripts with logging and evaluation.
 
 <h2> 📂 Project Structure</h2>
 
 ```
 streamlet/
 ├─ examples/          # Runnable scripts (Q / SARSA / AC / TD, QRC, AVG on MinAtar, Brax & ETT)
-├─ scripts/           # slurmpilot launchers (launch.py, minatar.py) + cluster config templates
 ├─ streamlet/
-   ├─ algorithms/     # QLambda, SARSALambda, ACLambda, NACLambda, TDLambda, QRCLambda, AVGLambda
-   ├─ optimizers/     # ObGD, AdaptiveQ, Implicit, Intentional, optax wrapper
-   ├─ environments/   # Gymnax / Brax / ALE / Gymnasium / ETT adapters + wrappers
-   ├─ networks/       # heads, layers, initializers
+   ├─ algorithms/     # Q/SARSA/AC/TD/QRC/AVGLambda, soft & recurrent variants
+   ├─ optimizers/     # ObGD, Adaptive, Implicit, Intentional, Calibrated, AlphaBound, optax wrapper
+   ├─ environments/   # Gymnax / Brax / ALE / Gymnasium / Craftax / PufferLib / Animax / native MinAtar / ETT adapters + wrappers
+   ├─ networks/       # layers, initializers
+   ├─ loggers/        # Dashboard, Weights & Biases, checkpoint, and multi-logger
    └─ utils/          # Timestep, Transition, TD-error scaler, helpers
 ```
 
