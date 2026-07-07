@@ -8,17 +8,17 @@ import jax.numpy as jnp
 import lox
 import optax
 
-from streax.algorithms import QRCLambda, QRCLambdaConfig
-from streax.environments import environment
-from streax.environments.wrappers import (
+from streamlet.algorithms import QRCLambda, QRCLambdaConfig
+from streamlet.environments import environment
+from streamlet.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
     StickyActionWrapper,
 )
-from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from streax.networks import Flatten, sparse
-from streax.optimizers import OptaxOptimizer
+from streamlet.loggers import DashboardLogger, MultiLogger, WandbLogger
+from streamlet.networks import Flatten, sparse
+from streamlet.optimizers import OptaxOptimizer
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")

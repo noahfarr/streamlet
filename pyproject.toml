@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "streax"
+name = "streamlet"
 version = "0.1.0"
-description = "Streax: Streaming RL in JAX"
+description = "Streamlet: Streaming RL in JAX"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

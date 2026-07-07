@@ -7,15 +7,15 @@ import jax
 import jax.numpy as jnp
 import lox
 
-from streax.algorithms import QLambda, QLambdaConfig
-from streax.environments import environment
-from streax.environments.wrappers import (
+from streamlet.algorithms import QLambda, QLambdaConfig
+from streamlet.environments import environment
+from streamlet.environments.wrappers import (
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
 )
-from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from streax.networks import LayerNorm, sparse
-from streax.optimizers import ObGD, ObGDConfig
+from streamlet.loggers import DashboardLogger, MultiLogger, WandbLogger
+from streamlet.networks import LayerNorm, sparse
+from streamlet.optimizers import ObGD, ObGDConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument(

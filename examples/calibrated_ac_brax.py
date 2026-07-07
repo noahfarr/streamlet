@@ -8,16 +8,16 @@ import jax
 import jax.numpy as jnp
 import lox
 
-from streax.algorithms import ACLambda, ACLambdaConfig
-from streax.environments import environment
-from streax.environments.wrappers import (
+from streamlet.algorithms import ACLambda, ACLambdaConfig
+from streamlet.environments import environment
+from streamlet.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
 )
-from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from streax.networks import sparse
-from streax.optimizers import (
+from streamlet.loggers import DashboardLogger, MultiLogger, WandbLogger
+from streamlet.networks import sparse
+from streamlet.optimizers import (
     Calibrated,
     CalibratedConfig,
     Intentional,

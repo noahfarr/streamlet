@@ -7,16 +7,16 @@ import lox
 import matplotlib.pyplot as plt
 import numpy as np
 
-from streax.algorithms import TDLambda, TDLambdaConfig
-from streax.environments import environment
-from streax.environments.wrappers import (
+from streamlet.algorithms import TDLambda, TDLambdaConfig
+from streamlet.environments import environment
+from streamlet.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     ObservationTracesWrapper,
     RecordEpisodeStatistics,
 )
-from streax.networks import sparse
-from streax.optimizers import ObGD, ObGDConfig
+from streamlet.networks import sparse
+from streamlet.optimizers import ObGD, ObGDConfig
 
 parser = argparse.ArgumentParser()
 parser.add_argument(

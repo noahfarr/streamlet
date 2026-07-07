@@ -10,16 +10,16 @@ import lox
 import optax
 from flax.linen.initializers import orthogonal, zeros
 
-from streax.algorithms import AVGLambda, AVGLambdaConfig
-from streax.environments import environment
-from streax.environments.wrappers import (
+from streamlet.algorithms import AVGLambda, AVGLambdaConfig
+from streamlet.environments import environment
+from streamlet.environments.wrappers import (
     NormalizeObservationWrapper,
     NormalizeRewardWrapper,
     RecordEpisodeStatistics,
 )
-from streax.loggers import DashboardLogger, MultiLogger, WandbLogger
-from streax.networks import L2Normalize
-from streax.optimizers import OptaxOptimizer
+from streamlet.loggers import DashboardLogger, MultiLogger, WandbLogger
+from streamlet.networks import L2Normalize
+from streamlet.optimizers import OptaxOptimizer
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging.")
