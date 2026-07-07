@@ -64,10 +64,10 @@ class SoftQLambda:
         assert self.cfg.tau > 0.0, f"tau must be > 0, got {self.cfg.tau}."
         assert self.cfg.unroll >= 1, f"unroll must be >= 1, got {self.cfg.unroll}."
 
-    def _soft_value(self, q_values: Array) -> Array:
+    def soft_value(self, q_values: Array) -> Array:
         return self.cfg.tau * logsumexp(q_values / self.cfg.tau, axis=-1)
 
-    def _env_step(
+    def env_step(
         self, state: SoftQLambdaState, key: Key, epsilon: Array
     ) -> tuple[SoftQLambdaState, Transition]:
         random_key, sample_key, step_key = jax.random.split(key, 3)
@@ -125,7 +125,7 @@ class SoftQLambda:
             transition,
         )
 
-    def _update_step(
+    def update_step(
         self,
         state: SoftQLambdaState,
         transition: Transition,
@@ -156,7 +156,7 @@ class SoftQLambda:
             state.q_params,
             q_grads,
             q_trace,
-            lambda params: self._soft_value(
+            lambda params: self.soft_value(
                 self.q_network.apply(params, transition.second.obs)
             ),
             self.cfg.gamma,
@@ -245,8 +245,8 @@ class SoftQLambda:
         def step(state, key):
             epsilon = self.epsilon_schedule(state.step)
             lox.log({"training/epsilon": epsilon})
-            state, transition = self._env_step(state, key, epsilon)
-            return self._update_step(state, transition), None
+            state, transition = self.env_step(state, key, epsilon)
+            return self.update_step(state, transition), None
 
         state, _ = jax.lax.scan(
             step,
@@ -278,7 +278,7 @@ class SoftQLambda:
         )
 
         def step(state, key):
-            state, _ = self._env_step(state, key, 0.0)
+            state, _ = self.env_step(state, key, 0.0)
             return state, None
 
         state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))

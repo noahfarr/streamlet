@@ -50,7 +50,7 @@ class TDLambda:
             f"unroll must be >= 1, got {self.cfg.unroll}."
         )
 
-    def _env_step(
+    def env_step(
         self, state: TDLambdaState, key: Key
     ) -> tuple[TDLambdaState, Transition]:
         action_space = self.env.action_space(self.env_params)
@@ -83,7 +83,7 @@ class TDLambda:
             transition,
         )
 
-    def _update_step(
+    def update_step(
         self, state: TDLambdaState, transition: Transition
     ) -> TDLambdaState:
         (value, intermediates), value_vjp = jax.vjp(
@@ -190,8 +190,8 @@ class TDLambda:
 
     def train(self, key: Key, state: TDLambdaState, num_steps: int) -> TDLambdaState:
         def step(state, key):
-            state, transition = self._env_step(state, key)
-            return self._update_step(state, transition), None
+            state, transition = self.env_step(state, key)
+            return self.update_step(state, transition), None
 
         state, _ = jax.lax.scan(
             step,
@@ -220,7 +220,7 @@ class TDLambda:
         )
 
         def step(state, key):
-            state, _ = self._env_step(state, key)
+            state, _ = self.env_step(state, key)
             return state, None
 
         state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))

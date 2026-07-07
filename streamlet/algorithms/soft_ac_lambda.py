@@ -68,7 +68,7 @@ class SoftACLambda:
             float(jnp.log(action_space.n)) if hasattr(action_space, "n") else 1.0
         )
 
-    def _env_step(
+    def env_step(
         self, state: SoftACLambdaState, key: Key, temperature: Array
     ) -> tuple[SoftACLambdaState, Transition]:
         action_key, step_key = jax.random.split(key)
@@ -133,7 +133,7 @@ class SoftACLambda:
             transition,
         )
 
-    def _update_step(
+    def update_step(
         self,
         state: SoftACLambdaState,
         transition: Transition,
@@ -339,8 +339,8 @@ class SoftACLambda:
         self, key: Key, state: SoftACLambdaState, num_steps: int
     ) -> SoftACLambdaState:
         def step(state, key):
-            state, transition = self._env_step(state, key, 1.0)
-            return self._update_step(state, transition), None
+            state, transition = self.env_step(state, key, 1.0)
+            return self.update_step(state, transition), None
 
         state, _ = jax.lax.scan(
             step,
@@ -374,7 +374,7 @@ class SoftACLambda:
         )
 
         def step(state, key):
-            state, _ = self._env_step(state, key, 0.0)
+            state, _ = self.env_step(state, key, 0.0)
             return state, None
 
         state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))

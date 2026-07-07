@@ -61,7 +61,7 @@ class QLambda:
         ), f"trace_lambda must be in [0, 1], got {self.cfg.trace_lambda}."
         assert self.cfg.unroll >= 1, f"unroll must be >= 1, got {self.cfg.unroll}."
 
-    def _env_step(
+    def env_step(
         self, state: QLambdaState, key: Key, epsilon: Array
     ) -> tuple[QLambdaState, Transition]:
         random_key, sample_key, step_key = jax.random.split(key, 3)
@@ -119,7 +119,7 @@ class QLambda:
             transition,
         )
 
-    def _update_step(
+    def update_step(
         self,
         state: QLambdaState,
         transition: Transition,
@@ -236,8 +236,8 @@ class QLambda:
         def step(state, key):
             epsilon = self.epsilon_schedule(state.step)
             lox.log({"training/epsilon": epsilon})
-            state, transition = self._env_step(state, key, epsilon)
-            return self._update_step(state, transition), None
+            state, transition = self.env_step(state, key, epsilon)
+            return self.update_step(state, transition), None
 
         state, _ = jax.lax.scan(
             step,
@@ -267,7 +267,7 @@ class QLambda:
         )
 
         def step(state, key):
-            state, _ = self._env_step(state, key, 0.0)
+            state, _ = self.env_step(state, key, 0.0)
             return state, None
 
         state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))

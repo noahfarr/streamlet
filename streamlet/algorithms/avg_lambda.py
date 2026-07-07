@@ -73,7 +73,7 @@ class AVGLambda:
             f"unroll must be >= 1, got {self.cfg.unroll}."
         )
 
-    def _env_step(
+    def env_step(
         self, state: AVGLambdaState, key: Key, temperature: Array
     ) -> tuple[AVGLambdaState, Transition]:
         sample_key, step_key, next_action_key = jax.random.split(key, 3)
@@ -114,7 +114,7 @@ class AVGLambda:
             transition,
         )
 
-    def _update_step(
+    def update_step(
         self, state: AVGLambdaState, transition: Transition
     ) -> AVGLambdaState:
         log_prob = transition.aux["log_prob"]
@@ -306,8 +306,8 @@ class AVGLambda:
 
     def train(self, key: Key, state: AVGLambdaState, num_steps: int) -> AVGLambdaState:
         def step(state, key):
-            state, transition = self._env_step(state, key, 1.0)
-            return self._update_step(state, transition), None
+            state, transition = self.env_step(state, key, 1.0)
+            return self.update_step(state, transition), None
 
         state, _ = jax.lax.scan(
             step,
@@ -340,7 +340,7 @@ class AVGLambda:
         )
 
         def step(state, key):
-            state, _ = self._env_step(state, key, 0.0)
+            state, _ = self.env_step(state, key, 0.0)
             return state, None
 
         state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))

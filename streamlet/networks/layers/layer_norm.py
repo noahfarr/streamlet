@@ -9,7 +9,7 @@ from streamlet.utils.typing import Array
 
 
 @partial(jax.custom_jvp, nondiff_argnums=(3,))
-def _layer_norm(x: Array, scale: Array, bias: Array, eps: float) -> Array:
+def layer_norm(x: Array, scale: Array, bias: Array, eps: float) -> Array:
     mean = x.mean(axis=-1, keepdims=True)
     centered = x - mean
     var = jnp.mean(jnp.square(centered), axis=-1, keepdims=True)
@@ -17,8 +17,8 @@ def _layer_norm(x: Array, scale: Array, bias: Array, eps: float) -> Array:
     return x_hat * scale + bias
 
 
-@_layer_norm.defjvp
-def _layer_norm_jvp(eps: float, primals, tangents):
+@layer_norm.defjvp
+def layer_norm_jvp(eps: float, primals, tangents):
     x, scale, bias = primals
     dx, dscale, dbias = tangents
 
@@ -60,4 +60,4 @@ class LayerNorm(nn.Module):
             bias = self.param("bias", self.bias_init, (features,), dtype)
         else:
             bias = jnp.zeros((features,), dtype)
-        return _layer_norm(x, scale, bias, self.epsilon)
+        return layer_norm(x, scale, bias, self.epsilon)

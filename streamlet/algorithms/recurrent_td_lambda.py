@@ -51,7 +51,7 @@ class RecurrentTDLambda:
             f"unroll must be >= 1, got {self.cfg.unroll}."
         )
 
-    def _env_step(
+    def env_step(
         self, state: RecurrentTDLambdaState, key: Key
     ) -> tuple[RecurrentTDLambdaState, Transition]:
         action_space = self.env.action_space(self.env_params)
@@ -107,7 +107,7 @@ class RecurrentTDLambda:
             transition,
         )
 
-    def _update_step(
+    def update_step(
         self, state: RecurrentTDLambdaState, transition: Transition
     ) -> RecurrentTDLambdaState:
         value = transition.aux["value"]
@@ -220,8 +220,8 @@ class RecurrentTDLambda:
         self, key: Key, state: RecurrentTDLambdaState, num_steps: int
     ) -> RecurrentTDLambdaState:
         def step(state, key):
-            state, transition = self._env_step(state, key)
-            return self._update_step(state, transition), None
+            state, transition = self.env_step(state, key)
+            return self.update_step(state, transition), None
 
         state, _ = jax.lax.scan(
             step,
@@ -253,7 +253,7 @@ class RecurrentTDLambda:
         )
 
         def step(state, key):
-            state, _ = self._env_step(state, key)
+            state, _ = self.env_step(state, key)
             return state, None
 
         state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))

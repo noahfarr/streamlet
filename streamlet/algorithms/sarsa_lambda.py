@@ -64,7 +64,7 @@ class SARSALambda:
             f"unroll must be >= 1, got {self.cfg.unroll}."
         )
 
-    def _env_step(
+    def env_step(
         self, state: SARSALambdaState, key: Key
     ) -> tuple[SARSALambdaState, Transition]:
         random_key, sample_key, step_key = jax.random.split(key, 3)
@@ -124,7 +124,7 @@ class SARSALambda:
             transition,
         )
 
-    def _update_step(
+    def update_step(
         self, state: SARSALambdaState, transition: Transition
     ) -> SARSALambdaState:
         action = transition.second.action
@@ -236,8 +236,8 @@ class SARSALambda:
         self, key: Key, state: SARSALambdaState, num_steps: int
     ) -> SARSALambdaState:
         def step(state, key):
-            state, transition = self._env_step(state, key)
-            return self._update_step(state, transition), None
+            state, transition = self.env_step(state, key)
+            return self.update_step(state, transition), None
 
         state, _ = jax.lax.scan(
             step,

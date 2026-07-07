@@ -62,7 +62,7 @@ class RecurrentACLambda:
             f"unroll must be >= 1, got {self.cfg.unroll}."
         )
 
-    def _env_step(
+    def env_step(
         self, state: RecurrentACLambdaState, key: Key, temperature: Array
     ) -> tuple[RecurrentACLambdaState, Transition]:
         action_key, step_key = jax.random.split(key)
@@ -157,7 +157,7 @@ class RecurrentACLambda:
             transition,
         )
 
-    def _update_step(
+    def update_step(
         self,
         state: RecurrentACLambdaState,
         transition: Transition,
@@ -352,8 +352,8 @@ class RecurrentACLambda:
         self, key: Key, state: RecurrentACLambdaState, num_steps: int
     ) -> RecurrentACLambdaState:
         def step(state, key):
-            state, transition = self._env_step(state, key, 1.0)
-            return self._update_step(state, transition), None
+            state, transition = self.env_step(state, key, 1.0)
+            return self.update_step(state, transition), None
 
         state, _ = jax.lax.scan(
             step,
@@ -391,7 +391,7 @@ class RecurrentACLambda:
         )
 
         def step(state, key):
-            state, _ = self._env_step(state, key, 0.0)
+            state, _ = self.env_step(state, key, 0.0)
             return state, None
 
         state, _ = jax.lax.scan(step, state, jax.random.split(eval_key, num_steps))
