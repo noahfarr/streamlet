@@ -99,7 +99,6 @@ critic_network = nn.Sequential(
     ]
 )
 
-# Intentional policy-gradient step for the actor (no bootstrap curvature).
 actor_optimizer = Intentional(
     cfg=IntentionalConfig(
         gamma=gamma,
@@ -109,9 +108,6 @@ actor_optimizer = Intentional(
     ),
     name="actor_optimizer",
 )
-# Calibrated (measured) step size for the critic. It consumes the bootstrap
-# curvature that ACLambda computes via critic_optimizer.bootstrap and picks
-# alpha = max(0, E[X]) / (E[X^2] + nu E[delta^2 ||z||^2]) each step.
 critic_optimizer = Calibrated(
     cfg=CalibratedConfig(
         precondition=True,

@@ -57,8 +57,6 @@ def _add(arr: jax.Array, row: jax.Array) -> jax.Array:
 
 
 class Seaquest(environment.Environment[EnvState, EnvParams]):
-    """JAX port of Seaquest MinAtar environment."""
-
     def __init__(self, use_minimal_action_set: bool = True, capacity: int = 32):
         super().__init__()
         self.obs_shape = (10, 10, 10)

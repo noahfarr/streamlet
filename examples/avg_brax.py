@@ -73,9 +73,6 @@ config = AVGLambdaConfig(
     trace_lambda=0.0,
 )
 
-# nn.Sequential passes *args to the first layer and unpacks tuple returns into
-# the next, so the multi-input critic and the action-threading both work without
-# a custom module. The actor's mean/log_std heads fold into one Dense(2*dim).
 actor_network = nn.Sequential(
     [
         nn.Dense(n_hid, kernel_init=orthogonal(), bias_init=zeros),

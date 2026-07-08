@@ -24,7 +24,7 @@ def sparse(sparsity: float = 0.9) -> Callable:
         perms = jax.vmap(lambda k: jax.random.permutation(k, fan_in))(
             jax.random.split(key, fan_out)
         )
-        mask = (perms >= n_zero).astype(dtype).T  # (fan_in, fan_out)
+        mask = (perms >= n_zero).astype(dtype).T
 
         return (weights_flat * mask).reshape(shape)
 

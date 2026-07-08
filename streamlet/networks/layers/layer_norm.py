@@ -29,10 +29,6 @@ def layer_norm_jvp(eps: float, primals, tangents):
     x_hat = centered * rstd
     y = x_hat * scale + bias
 
-    # d(x_hat) = rstd * (dx - mean(dx) - x_hat * mean(x_hat * dx)). The bracket is
-    # the same self-adjoint reduction used in the analytic backward, so reverse mode
-    # -- obtained by transposing this rule -- recovers the matmul-free VJP for free,
-    # while forward mode (the critic's curvature jvp) now works directly.
     mean_dx = dx.mean(axis=-1, keepdims=True)
     mean_dx_xhat = jnp.mean(dx * x_hat, axis=-1, keepdims=True)
     dx_hat = rstd * (dx - mean_dx - x_hat * mean_dx_xhat)

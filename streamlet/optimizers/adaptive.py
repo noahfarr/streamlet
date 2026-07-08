@@ -26,13 +26,6 @@ class AdaptiveState:
 
 @dataclass
 class Adaptive:
-    """Adaptive(λ) from "Revisiting Adam for Streaming RL" (arXiv:2605.06764).
-
-    Maintains an EMA of the squared gradient (Adam-style) and uses the
-    eligibility trace as the first-moment surrogate. The TD error is clipped to
-    [-clip, clip] (default ±1, the derivative of the SmoothL1 loss).
-    """
-
     cfg: AdaptiveConfig
     name: str = "adaptive"
 

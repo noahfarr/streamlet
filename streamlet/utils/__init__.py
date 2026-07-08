@@ -13,7 +13,6 @@ from .transition import Transition
 
 
 def canonicalize_dtype(dtype: Any) -> Any:
-    """Canonicalize a dtype for the current JAX configuration."""
     return jax.dtypes.canonicalize_dtype(dtype)
 
 

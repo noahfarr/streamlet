@@ -57,13 +57,6 @@ class DashboardLogger:
         self.live.start()
 
     def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
-        """Render a snapshot of a per-timestep sequence.
-
-        Leaves are ``(num_seeds, T, *rest)``; every axis after the seed axis
-        (the epoch ``T`` plus any trailing ``*rest``) is reduced with
-        ``nanmean``, giving a ``(num_seeds,)`` epoch mean per key (the table
-        then shows ``mean ± std`` across seeds). ``NaN``-only keys are dropped.
-        """
         steps = jnp.asarray(steps).reshape(-1)
         step = int(steps[-1])
         snapshot = {
@@ -79,10 +72,6 @@ class DashboardLogger:
 
     @staticmethod
     def _epoch_mean(leaf: PyTree):
-        """Reduce a ``(num_seeds, T, *rest)`` leaf to a per-seed mean over the
-        epoch, ignoring ``NaN`` (so sparse metrics like episode returns average
-        only the steps that produced a value). Returns ``None`` if the leaf is
-        entirely ``NaN``."""
         leaf = jnp.asarray(leaf)
         finite = jnp.isfinite(leaf)
         if not bool(jnp.any(finite)):

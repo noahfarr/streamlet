@@ -22,8 +22,6 @@ class EnvParams(environment.EnvParams):
 
 
 class Freeway(environment.Environment[EnvState, EnvParams]):
-    """Optimized JAX implementation of Freeway MinAtar environment."""
-
     def __init__(self, use_minimal_action_set: bool = True):
         super().__init__()
         self.obs_shape = (10, 10, 7)
@@ -71,7 +69,6 @@ class Freeway(environment.Environment[EnvState, EnvParams]):
     def reset_env(
         self, key: jax.Array, params: EnvParams
     ) -> tuple[jax.Array, EnvState]:
-        """Reset environment state by sampling initial position."""
         key_speed, key_dirs = jax.random.split(key)
         speeds = jax.random.randint(key_speed, shape=(8,), minval=1, maxval=6)
         directions = jax.random.choice(key_dirs, jnp.array([-1, 1]), shape=(8,))
@@ -107,24 +104,19 @@ class Freeway(environment.Environment[EnvState, EnvParams]):
 
     @property
     def name(self) -> str:
-        """Environment name."""
         return "Freeway-MinAtar"
 
     @property
     def num_actions(self) -> int:
-        """Number of actions possible in environment."""
         return len(self.action_set)
 
     def action_space(self, params: EnvParams | None = None) -> spaces.Discrete:
-        """Action space of the environment."""
         return spaces.Discrete(len(self.action_set))
 
     def observation_space(self, params: EnvParams) -> spaces.Box:
-        """Observation space of the environment."""
         return spaces.Box(0, 1, self.obs_shape)
 
     def state_space(self, params: EnvParams) -> spaces.Dict:
-        """State space of the environment."""
         return spaces.Dict(
             {
                 "pos": spaces.Discrete(10),
@@ -139,7 +131,6 @@ class Freeway(environment.Environment[EnvState, EnvParams]):
 def step_agent(
     action: jax.Array, state: EnvState, params: EnvParams
 ) -> tuple[EnvState, jax.Array, jax.Array]:
-    """Perform 1st part of step transition for agent."""
     cond_up = jnp.logical_and(action == 2, state.move_timer == 0)
     cond_down = jnp.logical_and(action == 4, state.move_timer == 0)
     any_cond = jnp.logical_or(cond_up, cond_down)
@@ -154,7 +145,6 @@ def step_agent(
 
 
 def step_cars(state: EnvState) -> EnvState:
-    """Vectorized car update + scalar agent-collision scan."""
     cars = state.cars
     x, y, timer, direction = cars[:, 0], cars[:, 1], cars[:, 2], cars[:, 3]
 
@@ -187,7 +177,6 @@ def randomize_cars(
     old_cars: jax.Array,
     initialize: bool,
 ) -> jax.Array:
-    """Randomize car speeds & directions, vectorized over the 8 cars."""
     speeds_new = directions * speeds
     new_cars = jnp.stack(
         [

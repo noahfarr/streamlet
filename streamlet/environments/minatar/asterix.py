@@ -9,8 +9,6 @@ from gymnax.environments import environment, spaces
 
 @struct.dataclass
 class EnvState(environment.EnvState):
-    """State of the environment."""
-
     player_x: int
     player_y: int
     shot_timer: int
@@ -36,14 +34,10 @@ class EnvParams(environment.EnvParams):
 
 
 class Asterix(environment.Environment[EnvState, EnvParams]):
-    """Optimized JAX implementation of Asterix MinAtar environment."""
-
     def __init__(self, use_minimal_action_set: bool = True):
         super().__init__()
         self.obs_shape = (10, 10, 4)
-        # Full action set: ['n','l','u','r','d','f']
         self.full_action_set = jnp.array([0, 1, 2, 3, 4, 5])
-        # Minimal action set: ['n', 'l', 'u', 'r', 'd']
         self.minimal_action_set = jnp.array([0, 1, 2, 3, 4])
         if use_minimal_action_set:
             self.action_set = self.minimal_action_set
@@ -61,8 +55,6 @@ class Asterix(environment.Environment[EnvState, EnvParams]):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
-        """Perform single timestep state transition."""
-        # Spawn enemy if timer up - sample at each step & select based on timer
         spawn_entities_now = state.spawn_timer == 0
         entity, slot = spawn_entity(key, state)
         should_spawn = jnp.logical_and(spawn_entities_now, entity[4] != 0)
@@ -76,17 +68,13 @@ class Asterix(environment.Environment[EnvState, EnvParams]):
         )
         state = state.replace(entities=entities, spawn_timer=spawn_timer)
 
-        # Update state of the players
         a = self.action_set[action]
         state = step_agent(state, a)
 
-        # Update entities, get reward and figure out termination
         state, reward, done = step_entities(state)
 
-        # Update timers and ramping condition check
         state = step_timers(state, params)
 
-        # Check game condition & no. steps for termination condition
         state = state.replace(time=state.time + 1, terminal=done)
         done = self.is_terminal(state, params)
         info = {}
@@ -101,7 +89,6 @@ class Asterix(environment.Environment[EnvState, EnvParams]):
     def reset_env(
         self, key: jax.Array, params: EnvParams
     ) -> tuple[jax.Array, EnvState]:
-        """Reset environment state by sampling initial position."""
         state = EnvState(
             player_x=5,
             player_y=5,
@@ -139,7 +126,6 @@ class Asterix(environment.Environment[EnvState, EnvParams]):
         return obs
 
     def is_terminal(self, state: EnvState, params: EnvParams) -> jax.Array:
-        """Terminal on enemy collision (official); optional time cap if >0."""
         capped = jnp.logical_and(
             params.max_steps_in_episode > 0,
             state.time >= params.max_steps_in_episode,
@@ -148,24 +134,19 @@ class Asterix(environment.Environment[EnvState, EnvParams]):
 
     @property
     def name(self) -> str:
-        """Environment name."""
         return "Asterix-MinAtar"
 
     @property
     def num_actions(self) -> int:
-        """Number of actions possible in environment."""
         return len(self.action_set)
 
     def action_space(self, params: EnvParams | None = None) -> spaces.Discrete:
-        """Action space of the environment."""
         return spaces.Discrete(len(self.action_set))
 
     def observation_space(self, params: EnvParams) -> spaces.Box:
-        """Observation space of the environment."""
         return spaces.Box(0, 1, self.obs_shape)
 
     def state_space(self, params: EnvParams) -> spaces.Dict:
-        """State space of the environment."""
         return spaces.Dict(
             {
                 "player_x": spaces.Discrete(10),
@@ -185,23 +166,21 @@ class Asterix(environment.Environment[EnvState, EnvParams]):
 
 
 def step_agent(state: EnvState, action: jax.Array) -> EnvState:
-    """Update the position of the agent."""
     player_x = (
-        jnp.maximum(0, state.player_x - 1) * (action == 1)  # l
-        + jnp.minimum(9, state.player_x + 1) * (action == 3)  # r
+        jnp.maximum(0, state.player_x - 1) * (action == 1)
+        + jnp.minimum(9, state.player_x + 1) * (action == 3)
         + state.player_x * jnp.logical_and(action != 1, action != 3)
     )
 
     player_y = (
-        jnp.maximum(1, state.player_y - 1) * (action == 2)  # u
-        + jnp.minimum(8, state.player_y + 1) * (action == 4)  # d
+        jnp.maximum(1, state.player_y - 1) * (action == 2)
+        + jnp.minimum(8, state.player_y + 1) * (action == 4)
         + state.player_y * jnp.logical_and(action != 2, action != 4)
     )
     return state.replace(player_x=player_x, player_y=player_y)
 
 
 def spawn_entity(key: jax.Array, state: EnvState) -> tuple[jax.Array, jax.Array]:
-    """Spawn enemy/treasure at a random free slot (official semantics)."""
     key_lr, key_gold, key_slot = jax.random.split(key, 3)
     lr = jax.random.choice(key_lr, jnp.array([1, 0]))
     is_gold = jax.random.choice(
@@ -216,7 +195,6 @@ def spawn_entity(key: jax.Array, state: EnvState) -> tuple[jax.Array, jax.Array]
 def sample_free_slot(
     key: jax.Array, state_entities: jax.Array
 ) -> tuple[jax.Array, jax.Array]:
-    """Uniformly pick a free slot; free=0 if none are free."""
     free = state_entities == 0
     r = jax.random.uniform(key, (8,))
     slot_id = jnp.argmax(jnp.where(free, r, -1.0))
@@ -225,7 +203,6 @@ def sample_free_slot(
 
 
 def step_entities(state: EnvState) -> tuple[EnvState, jax.Array, jax.Array]:
-    """Vectorized port of gymnax's two 8-entity loops."""
     entities = state.entities
     px, py = state.player_x, state.player_y
 
@@ -271,11 +248,9 @@ def step_entities(state: EnvState) -> tuple[EnvState, jax.Array, jax.Array]:
 
 
 def step_timers(state: EnvState, params: EnvParams) -> EnvState:
-    """Update various timers and check the ramping condition."""
     spawn_timer = state.spawn_timer - 1
     move_timer = state.move_timer - 1
 
-    # Ramp difficulty if interval has elapsed
     ramp_cond = jnp.logical_and(
         params.ramping,
         jnp.logical_or(state.spawn_speed > 1, state.move_speed > 1),

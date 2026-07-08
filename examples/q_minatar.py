@@ -46,7 +46,6 @@ ENV_IDS = [
     "gymnax::SpaceInvaders-MinAtar",
 ]
 
-# Each entry builds a fresh optimizer instance with its tuned hyperparameters.
 OPTIMIZERS = {
     "calibrated": lambda: Calibrated(cfg=CalibratedConfig(), name="q_optimizer"),
     "implicit": lambda: Implicit(

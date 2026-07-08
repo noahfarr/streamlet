@@ -45,8 +45,6 @@ class NormalizeRewardWrapper(GymnaxWrapper):
         return mean, M2, count
 
     def _variance(self, M2: Array, count: float) -> Array:
-        # Sample (Bessel-corrected) variance, with var=1 until two samples seen,
-        # matching the reference SampleMeanStd estimator.
         return jnp.where(
             count < 2, jnp.ones_like(M2), M2 / jnp.maximum(count - 1.0, 1.0)
         )

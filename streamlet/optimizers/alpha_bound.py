@@ -23,15 +23,6 @@ class AlphaBoundState:
 
 @dataclass
 class AlphaBound:
-    """AlphaBound (Dabney & Barto, 2012), "Adaptive Step-Size for Online TD Learning".
-
-    A single step size that only ever decreases. Each step it is clamped to the largest
-    value that keeps the update from overshooting the current sample's deadbeat point:
-    alpha <= 1 / |z^T (phi - gamma phi')|, where z^T(phi - gamma phi') is the per-sample
-    interaction supplied as the curvature term. Maintained as a running minimum, starting
-    at alpha = 1.
-    """
-
     cfg: AlphaBoundConfig
     name: str = "alpha_bound"
 

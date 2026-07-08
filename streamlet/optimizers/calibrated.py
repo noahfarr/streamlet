@@ -41,24 +41,6 @@ class CalibratedState:
 
 @dataclass
 class Calibrated:
-    """Calibrated (measured) step size for the critic of a streaming agent.
-
-    A single per-step scalar quadratic in the step size ``alpha`` minimizes the
-    next value-error second moment. With ``X`` the interaction (contraction-rate
-    sample, the bootstrap curvature) and ``y = delta^2 ||z||^2`` the
-    target-variance sample::
-
-        alpha = max(0, E[X]) / (E[X^2] + nu * E[y])
-
-    The ``max(0, .)`` is the expansiveness off-switch: a non-positive ``E[X]``
-    means no positive step contracts (the semi-gradient operator is asymmetric)
-    and the head freezes. The update uses the preconditioned direction ``z``, the
-    noise functional ``E[delta^2 ||z||^2]``, the update form ``alpha * delta * z``,
-    and the optional Huber / adaptive TD-error clipping. The caller must supply the
-    bootstrap curvature ``interaction``; the no-curvature (measured-policy-gradient)
-    path has been removed.
-    """
-
     cfg: CalibratedConfig
     name: str = "calibrated"
 
@@ -147,16 +129,9 @@ class Calibrated:
         tree_norms = jax.tree.map(squared_norm, direction)
         squared_z_norm = jax.tree_util.tree_reduce(jnp.add, tree_norms)
 
-        # Streaming sample g_hat = delta * z (the update direction, pre-step).
         g_hat = jax.tree.map(lambda z: td_error * z, direction)
         y_t = jnp.square(td_error) * squared_z_norm
 
-        # Measured critic step: alpha = max(0, E[X]) / (E[X^2] + nu E[y]). The gain
-        # is computed from the PRIOR (pre-update) moments, so it is F_{t-1}-
-        # measurable -- independent of the current sample it multiplies. That keeps
-        # alpha * delta * z an unbiased descent step (the fresh-moment alternative
-        # correlates the gain with its own direction) and gives a free warmup: the
-        # zero-initialized moments yield alpha = 0 until real statistics fill in.
         if self.cfg.adaptive_nu:
             nu = self.cfg.rho_target * state.s_hat / (state.y_hat + self.cfg.eps)
         else:
@@ -169,7 +144,6 @@ class Calibrated:
 
         updates = jax.tree.map(lambda g: (alpha * g).astype(self.cfg.dtype), g_hat)
 
-        # Fold the current sample into the moment estimates for the next step.
         second_moment = jnp.square(interaction)
         m_hat = self.cfg.beta * state.m_hat + (1.0 - self.cfg.beta) * interaction
         s_hat = self.cfg.beta * state.s_hat + (1.0 - self.cfg.beta) * second_moment

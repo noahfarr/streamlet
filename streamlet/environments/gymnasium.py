@@ -14,20 +14,6 @@ class GymnasiumState:
 
 
 class GymnasiumWrapper:
-    """Wrap a vectorized ``gymnasium`` env behind the gymnax step/reset API.
-
-    The real env is stepped through ``jax.pure_callback`` so it composes with
-    the rest of the (jit/vmap-able) streamlet pipeline. Both discrete (``Discrete``)
-    and continuous (``Box``) action spaces are supported; continuous actions are
-    clipped to the action bounds before being handed to the env.
-
-    Multiple seeds are handled with the ``batch_shape`` trick from
-    :class:`PufferLibWrapper`: the callback is declared to return a single
-    environment's shapes, ``vmap`` prepends the seed axis, and the underlying
-    vec env (sized ``prod(batch_shape)``) steps one sub-env per seed. Each
-    sub-env keeps its own RNG, so seeds are independently randomized.
-    """
-
     def __init__(self, environment, batch_shape: tuple[int, ...] = (1,)):
         self._environment = environment
         self.batch_shape = tuple(batch_shape)

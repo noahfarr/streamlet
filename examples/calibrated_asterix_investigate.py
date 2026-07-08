@@ -1,22 +1,3 @@
-"""Per-seed investigation of the Asterix-MinAtar / QLambda divergence.
-
-Runs a focused diagnostic (default 200k steps) comparing, on identical env
-seeds and an identical network/normalization stack (sticky actions matched):
-
-  - obgd                : ObGD baseline (known to learn Asterix).
-  - calibrated            : Calibrated with preconditioning ON  (beta=0.999).
-  - calibrated-no-precond : Calibrated with preconditioning OFF (beta=1.0 freezes
-                          v at preconditioning_init, so P is a constant ~= I;
-                          because alpha self-normalises the uniform scale this
-                          is exactly the pre-preconditioning Calibrated).
-  - calibrated-alphacap   : Calibrated (precond off) with alpha_max=1e-2, to test
-                          whether an early oversized step triggers divergence.
-
-For each config it reports, PER SEED (aggregate means are poisoned by a single
-diverging seed), the divergence onset step and a finite-guarded summary, then
-saves per-seed diagnostic plots.
-"""
-
 import argparse
 from pathlib import Path
 
@@ -51,9 +32,6 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# Epsilon schedule is deliberately tied to the production 5M-step horizon so the
-# exploration regime (epsilon ~0.9 around ~100k steps) matches the real run even
-# though we only roll out `--steps`.
 TOTAL_TIMESTEPS = 5_000_000
 gamma = 0.99
 trace_lambda = 0.8
@@ -109,7 +87,6 @@ CONFIGS = {
 
 
 def run_config(name, optimizer, env, env_params, num_actions, init_key, train_key):
-    """Train `--num_seeds` seeds and return host-side numpy logs (seeds x steps)."""
     config = QLambdaConfig(gamma=gamma, trace_lambda=trace_lambda)
     network = make_network(num_actions)
     agent = QLambda(config, env, env_params, network, epsilon_schedule, optimizer)
@@ -117,8 +94,6 @@ def run_config(name, optimizer, env, env_params, num_actions, init_key, train_ke
     init = jax.vmap(agent.init)
     train = jax.jit(jax.vmap(lox.spool(agent.train), in_axes=(0, 0, None)), static_argnums=2, donate_argnums=1)
 
-    # SAME init/train keys across configs -> identical network init and env-seed
-    # stream; only the learning rule differs.
     state = init(jax.random.split(init_key, args.num_seeds))
     state = jax.tree.map(lambda x: jax.lax.convert_element_type(x, x.dtype), state)
     state, logs = train(jax.random.split(train_key, args.num_seeds), state, args.steps)
@@ -128,14 +103,12 @@ def run_config(name, optimizer, env, env_params, num_actions, init_key, train_ke
 
 
 def onset_step(q_per_step, threshold):
-    """First step index where |q| exceeds threshold or is non-finite; -1 if never."""
     bad = ~np.isfinite(q_per_step) | (np.abs(q_per_step) > threshold)
     idx = np.argmax(bad)
     return int(idx) if bad[idx] else -1
 
 
 def finite_summary(arr):
-    """Mean/median over finite entries only (NaN-guarded)."""
     finite = arr[np.isfinite(arr)]
     if finite.size == 0:
         return float("nan"), float("nan")
@@ -143,7 +116,7 @@ def finite_summary(arr):
 
 
 def report(name, logs, threshold):
-    q = logs["q_network/q_value"]  # (seeds, steps)
+    q = logs["q_network/q_value"]
     num_seeds = q.shape[0]
     print(f"\n===== {name} =====")
     onsets = []
@@ -191,7 +164,6 @@ def plot_config(name, logs, onsets, plot_dir):
             ax.plot(y, lw=0.7, alpha=0.8, label=f"seed {s}")
         ax.set_title(f"{name} | {k}")
         ax.set_xlabel("step")
-        # symlog handles the huge magnitudes near divergence without clipping.
         ax.set_yscale("symlog")
         if k == "q_network/q_value":
             ax.legend(fontsize=6, ncol=2)
@@ -226,7 +198,7 @@ def main():
         onsets = report(name, logs, args.diverge_threshold)
         plot_config(name, logs, onsets, plot_dir)
         summary[name] = onsets
-        del logs  # free host memory before the next config
+        del logs
 
     print("\n===== SUMMARY (onset step per seed; -1 = stable) =====")
     for name, onsets in summary.items():

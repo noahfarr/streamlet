@@ -9,8 +9,6 @@ from gymnax.environments import environment, spaces
 
 @struct.dataclass
 class EnvState(environment.EnvState):
-    """State of the environment."""
-
     pos: int
     f_bullet_map: jax.Array
     e_bullet_map: jax.Array
@@ -35,14 +33,10 @@ class EnvParams(environment.EnvParams):
 
 
 class SpaceInvaders(environment.Environment[EnvState, EnvParams]):
-    """Optimized JAX implementation of Space Invaders MinAtar environment."""
-
     def __init__(self, use_minimal_action_set: bool = True):
         super().__init__()
         self.obs_shape = (10, 10, 6)
-        # Full action set: ['n','l','u','r','d','f']
         self.full_action_set = jnp.array([0, 1, 2, 3, 4, 5])
-        # Minimal action set: ['n','l','r','f']
         self.minimal_action_set = jnp.array([0, 1, 3, 5])
         if use_minimal_action_set:
             self.action_set = self.minimal_action_set
@@ -60,8 +54,6 @@ class SpaceInvaders(environment.Environment[EnvState, EnvParams]):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
-        """Perform single timestep state transition."""
-        # Resolve player action - fire, left, right.
         a = self.action_set[action]
         state = step_agent(a, state, params)
         state = step_aliens(state)
@@ -107,7 +99,6 @@ class SpaceInvaders(environment.Environment[EnvState, EnvParams]):
     def reset_env(
         self, key: jax.Array, params: EnvParams
     ) -> tuple[jax.Array, EnvState]:
-        """Reset environment state by sampling initial position."""
         state = EnvState(
             pos=5,
             f_bullet_map=jnp.zeros((10, 10)),
@@ -126,9 +117,7 @@ class SpaceInvaders(environment.Environment[EnvState, EnvParams]):
         return self.get_obs(state), state
 
     def get_obs(self, state: EnvState, params=None, key=None) -> jax.Array:
-        """Return observation from raw state trafo."""
         obs = jnp.zeros((10, 10, 6), dtype=jnp.float32)
-        # Update cannon, aliens - left + right dir, friendly + enemy bullet
         obs = obs.at[9, state.pos, 0].set(1.0)
         obs = obs.at[:, :, 1].set(state.alien_map)
         left_dir_cond = state.alien_dir < 0
@@ -150,24 +139,19 @@ class SpaceInvaders(environment.Environment[EnvState, EnvParams]):
 
     @property
     def name(self) -> str:
-        """Environment name."""
         return "SpaceInvaders-MinAtar"
 
     @property
     def num_actions(self) -> int:
-        """Number of actions possible in environment."""
         return len(self.action_set)
 
     def action_space(self, params: EnvParams | None = None) -> spaces.Discrete:
-        """Action space of the environment."""
         return spaces.Discrete(len(self.action_set))
 
     def observation_space(self, params: EnvParams) -> spaces.Box:
-        """Observation space of the environment."""
         return spaces.Box(0, 1, self.obs_shape)
 
     def state_space(self, params: EnvParams) -> spaces.Dict:
-        """State space of the environment."""
         return spaces.Dict(
             {
                 "pos": spaces.Discrete(10),
@@ -188,7 +172,6 @@ class SpaceInvaders(environment.Environment[EnvState, EnvParams]):
 
 
 def step_agent(action: jax.Array, state: EnvState, params: EnvParams) -> EnvState:
-    """Resolve player action - fire, left, right."""
     fire_cond = jnp.logical_and(action == 5, state.shot_timer == 0)
     left_cond, right_cond = (action == 1), (action == 3)
     f_bullet_map = jax.lax.select(
@@ -219,7 +202,6 @@ def step_agent(action: jax.Array, state: EnvState, params: EnvParams) -> EnvStat
 
 
 def step_aliens(state: EnvState) -> EnvState:
-    """Update aliens - border and collision check."""
     alien_terminal_1 = state.alien_map[9, state.pos]
     alien_move_cond = state.alien_move_timer == 0
 
@@ -259,7 +241,6 @@ def step_aliens(state: EnvState) -> EnvState:
 
 
 def step_shoot(state: EnvState, params: EnvParams) -> tuple[EnvState, jax.Array]:
-    """Update aliens - shooting check and calculate rewards."""
     alien_shot_cond = state.alien_shot_timer == 0
     alien_shot_timer = jax.lax.select(
         alien_shot_cond, params.enemy_shot_interval, state.alien_shot_timer
@@ -293,7 +274,6 @@ def step_shoot(state: EnvState, params: EnvParams) -> tuple[EnvState, jax.Array]
 def get_nearest_alien(
     pos: int, alien_map: jax.Array
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Closest alien column to the player; ties resolve to the lower column."""
     cols = jnp.arange(10)
     exists = jnp.sum(alien_map, axis=0) > 0
     any_exist = exists.any()

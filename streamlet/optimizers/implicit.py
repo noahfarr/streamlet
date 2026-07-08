@@ -11,19 +11,6 @@ from streamlet.utils.typing import Array, PyTree
 
 @struct.dataclass(frozen=True)
 class ImplicitConfig:
-    """Implicit TD(lambda): the Intentional backbone with a closed-loop term.
-
-    The update is
-
-        w <- w + eta * delta_tilde * (rho z) / ( sqrt(sigma_bar <z, rho z>) + eta * c_t )
-
-    with c_t = <g - gamma g', rho z> the interaction (curvature) supplied by the
-    algorithm, and the denominator floored at kappa * sqrt(sigma_bar <z, rho z>)
-    so a negative c_t cannot shrink or flip it. Setting c_t -> 0 recovers
-    Intentional exactly; rho = (sqrt(nu) + eps)^-1 is the RMSProp preconditioner
-    and sigma_bar the discounted accumulated gradient energy E[<g, rho g>].
-    """
-
     gamma: float
     trace_lambda: float
     eta: float = 0.5
