@@ -82,6 +82,21 @@ class WandbLogger:
             for step in sorted(rows):
                 run.log(rows[step], step=step)
 
+    def log_summary(self, data: PyTree, **kwargs) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            data = {
+                "/".join(str(p.key) for p in path): np.nanmean(
+                    np.asarray(jax.device_get(leaf)),
+                    axis=tuple(range(1, np.ndim(leaf))),
+                )
+                for path, leaf in jax.tree_util.tree_leaves_with_path(data)
+            }
+        for seed, run in self.runs.items():
+            for k, v in data.items():
+                if np.isfinite(v[seed]):
+                    run.summary[k] = float(v[seed])
+
     def log_artifact(self, state: PyTree, step: int, **kwargs) -> None:
         from flax import serialization
 

@@ -70,6 +70,9 @@ class DashboardLogger:
         )
         self.live.update(dashboard, refresh=True)
 
+    def log_summary(self, data: PyTree, **kwargs) -> None:
+        pass
+
     @staticmethod
     def _epoch_mean(leaf: PyTree):
         leaf = jnp.asarray(leaf)

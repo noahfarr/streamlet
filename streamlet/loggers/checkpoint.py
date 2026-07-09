@@ -40,6 +40,9 @@ class CheckpointLogger:
     def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
         pass
 
+    def log_summary(self, data: PyTree, **kwargs) -> None:
+        pass
+
     def log_artifact(self, state: PyTree, step: int, metrics=None, **kwargs) -> None:
         self.latest.save(step, args=ocp.args.StandardSave(state))
         self.best.save(step, args=ocp.args.StandardSave(state), metrics=metrics or {})
