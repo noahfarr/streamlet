@@ -15,7 +15,7 @@ class MultiLogger:
     def __init__(self, loggers: list[Logger]):
         self.loggers = loggers
 
-    async def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
+    def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
         for logger in self.loggers:
             logger.log(data, steps, **kwargs)
 
