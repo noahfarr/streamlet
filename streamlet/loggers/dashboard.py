@@ -70,6 +70,9 @@ class DashboardLogger:
         )
         self.live.update(dashboard, refresh=True)
 
+    def log_artifact(self, state: PyTree, step: int, **kwargs) -> None:
+        pass
+
     def log_summary(self, data: PyTree, **kwargs) -> None:
         pass
 

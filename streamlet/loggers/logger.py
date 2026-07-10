@@ -1,4 +1,4 @@
-import atexit
+import asyncio
 from typing import Protocol, runtime_checkable
 
 from streamlet.utils.typing import PyTree
@@ -15,22 +15,23 @@ class Logger(Protocol):
 class MultiLogger:
     def __init__(self, loggers: list[Logger]):
         self.loggers = loggers
-        atexit.register(self.finish)
 
-    def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
-        for logger in self.loggers:
-            logger.log(data, steps, **kwargs)
+    async def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
+        async with asyncio.TaskGroup() as tg:
+            for logger in self.loggers:
+                tg.create_task(logger.log(data, steps, **kwargs))
 
-    def log_summary(self, data: PyTree, **kwargs) -> None:
-        for logger in self.loggers:
-            logger.log_summary(data, **kwargs)
+    async def log_summary(self, data: PyTree, **kwargs) -> None:
+        async with asyncio.TaskGroup() as tg:
+            for logger in self.loggers:
+                tg.create_task(logger.log_summary(data, **kwargs))
 
-    def log_artifact(self, state: PyTree, step: int, **kwargs) -> None:
-        for logger in self.loggers:
-            log_artifact = getattr(logger, "log_artifact", None)
-            if log_artifact is not None:
-                log_artifact(state, step, **kwargs)
+    async def log_artifact(self, state: PyTree, step: int, **kwargs) -> None:
+        async with asyncio.TaskGroup() as tg:
+            for logger in self.loggers:
+                tg.create_task(logger.log_artifact(state, step, **kwargs))
 
-    def finish(self) -> None:
-        for logger in self.loggers:
-            logger.finish()
+    async def finish(self) -> None:
+        async with asyncio.TaskGroup() as tg:
+            for logger in self.loggers:
+                tg.create_task(logger.finish())
