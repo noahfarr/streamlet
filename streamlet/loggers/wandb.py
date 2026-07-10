@@ -54,6 +54,7 @@ class WandbLogger:
                     "seed": seed + i,
                 },
                 reinit="create_new",
+                settings=wandb.Settings(quiet=True),
             )
             for i in range(num_seeds)
         }
