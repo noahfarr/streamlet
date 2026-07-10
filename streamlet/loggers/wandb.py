@@ -1,11 +1,10 @@
 import dataclasses
 import hashlib
-import warnings
 
 import jax
 import numpy as np
-import wandb
 
+import wandb
 from streamlet.utils.typing import PyTree
 
 
@@ -61,41 +60,34 @@ class WandbLogger:
 
     def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
         steps = np.asarray(jax.device_get(steps)).reshape(-1)
-        start, span = int(steps[0]), int(steps[-1]) - int(steps[0])
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            data = {
-                "/".join(str(p.key) for p in path): np.nanmean(
-                    np.asarray(jax.device_get(leaf)),
-                    axis=tuple(range(2, np.ndim(leaf))),
-                )
-                for path, leaf in jax.tree_util.tree_leaves_with_path(data)
-            }
+        start, end = int(steps.min()), int(steps.max())
+        span = end - start
+        data = jax.device_get(data)
+
+        rows: list[dict[int, dict]] = [{} for _ in self.runs]
+        for k, v in data.items():
+            v = np.asarray(v)
+            _, length = v.shape
+            grid = start + (np.arange(length) + 1) * span // length
+            seed_idx, time_idx = np.nonzero(np.isfinite(v))
+            for seed, step, value in zip(
+                seed_idx.tolist(),
+                grid[time_idx].tolist(),
+                v[seed_idx, time_idx].tolist(),
+            ):
+                rows[seed].setdefault(step, {})[k] = value
+
         for seed, run in self.runs.items():
-            rows: dict[int, dict] = {}
-            for k, v in data.items():
-                length = v.shape[1]
-                grid = start + (np.arange(length) + 1) * span // length
-                for t, step in enumerate(grid):
-                    if np.isfinite(v[seed, t]):
-                        rows.setdefault(int(step), {})[k] = float(v[seed, t])
-            for step in sorted(rows):
-                run.log(rows[step], step=step)
+            for step in sorted(rows[seed]):
+                run.log(rows[seed][step], step=step)
 
     def log_summary(self, data: PyTree, **kwargs) -> None:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            data = {
-                "/".join(str(p.key) for p in path): np.nanmean(
-                    np.asarray(jax.device_get(leaf)),
-                    axis=tuple(range(1, np.ndim(leaf))),
-                )
-                for path, leaf in jax.tree_util.tree_leaves_with_path(data)
-            }
+        data = jax.device_get(data)
         for seed, run in self.runs.items():
             for k, v in data.items():
-                if np.isfinite(v[seed]):
-                    run.summary[k] = float(v[seed])
+                value = np.asarray(v)[seed]
+                if np.isfinite(value):
+                    run.summary[k] = float(value)
 
     def log_artifact(self, state: PyTree, step: int, **kwargs) -> None:
         from flax import serialization
