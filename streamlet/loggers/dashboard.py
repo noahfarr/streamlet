@@ -59,14 +59,15 @@ class DashboardLogger:
     def log(self, data: PyTree, steps: PyTree, **kwargs) -> None:
         steps = jnp.asarray(steps).reshape(-1)
         step = int(steps[-1])
-        snapshot = {
-            "/".join(str(p.key) for p in path): self._epoch_mean(leaf)
+        metrics = {
+            "/".join(str(p.key) for p in path): leaf.mean(
+                axis=tuple(range(1, leaf.ndim))
+            )
             for path, leaf in jax.tree_util.tree_leaves_with_path(data)
         }
-        snapshot = {k: v for k, v in snapshot.items() if v is not None}
         self.progress.update(self.progress_task, completed=step)
         dashboard = self.build_dashboard(
-            snapshot, step, self.progress, self.progress_task
+            metrics, step, self.progress, self.progress_task
         )
         self.live.update(dashboard, refresh=True)
 
@@ -75,17 +76,6 @@ class DashboardLogger:
 
     def log_summary(self, data: PyTree, **kwargs) -> None:
         pass
-
-    @staticmethod
-    def _epoch_mean(leaf: PyTree):
-        leaf = jnp.asarray(leaf)
-        finite = jnp.isfinite(leaf)
-        if not bool(jnp.any(finite)):
-            return None
-        axes = tuple(range(1, leaf.ndim))
-        total = jnp.nansum(leaf, axis=axes)
-        count = jnp.sum(finite, axis=axes)
-        return total / jnp.maximum(count, 1)
 
     def finish(self) -> None:
         self.live.stop()

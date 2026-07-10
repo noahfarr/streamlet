@@ -47,13 +47,6 @@ class CheckpointLogger:
         self.latest.save(step, args=ocp.args.StandardSave(state))
         self.best.save(step, args=ocp.args.StandardSave(state), metrics=metrics or {})
 
-    def restore(self, state: PyTree) -> tuple[PyTree, int]:
-        step = self.latest.latest_step()
-        if step is None:
-            return state, 0
-        state = self.latest.restore(step, args=ocp.args.StandardRestore(state))
-        return state, step + 1
-
     def finish(self) -> None:
         self.latest.wait_until_finished()
         self.best.wait_until_finished()
