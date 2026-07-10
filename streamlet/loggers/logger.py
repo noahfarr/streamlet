@@ -21,17 +21,16 @@ class MultiLogger:
             for logger in self.loggers:
                 tg.create_task(logger.log(data, steps, **kwargs))
 
-    async def log_summary(self, data: PyTree, **kwargs) -> None:
-        async with asyncio.TaskGroup() as tg:
-            for logger in self.loggers:
-                tg.create_task(logger.log_summary(data, **kwargs))
+    def log_summary(self, data: PyTree, **kwargs) -> None:
+        for logger in self.loggers:
+            logger.log_summary(data, **kwargs)
 
-    async def log_artifact(self, state: PyTree, step: int, **kwargs) -> None:
-        async with asyncio.TaskGroup() as tg:
-            for logger in self.loggers:
-                tg.create_task(logger.log_artifact(state, step, **kwargs))
+    def log_artifact(self, state: PyTree, step: int, **kwargs) -> None:
+        for logger in self.loggers:
+            log_artifact = getattr(logger, "log_artifact", None)
+            if log_artifact is not None:
+                log_artifact(state, step, **kwargs)
 
-    async def finish(self) -> None:
-        async with asyncio.TaskGroup() as tg:
-            for logger in self.loggers:
-                tg.create_task(logger.finish())
+    def finish(self) -> None:
+        for logger in self.loggers:
+            logger.finish()
