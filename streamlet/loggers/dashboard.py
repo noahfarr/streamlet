@@ -1,7 +1,6 @@
 from collections import defaultdict
 from typing import Any
 
-import jax
 import jax.numpy as jnp
 from rich import box
 from rich.console import Console
@@ -60,10 +59,8 @@ class DashboardLogger:
         steps = jnp.asarray(steps).reshape(-1)
         step = int(steps[-1])
         metrics = {
-            "/".join(str(p.key) for p in path): leaf.mean(
-                axis=tuple(range(1, leaf.ndim))
-            )
-            for path, leaf in jax.tree_util.tree_leaves_with_path(data)
+            k: jnp.array([jnp.asarray(row).mean() for row in v])
+            for k, v in data.items()
         }
         self.progress.update(self.progress_task, completed=step)
         dashboard = self.build_dashboard(
@@ -82,10 +79,6 @@ class DashboardLogger:
         self.console.show_cursor(True)
 
     def group(self, data: dict[str, PyTree]) -> dict[str, dict[str, Any]]:
-        data = {
-            "/".join(str(p.key) for p in path): leaf
-            for path, leaf in jax.tree_util.tree_leaves_with_path(data)
-        }
         groups = defaultdict(dict)
         for key, value in data.items():
             if "/" in key:

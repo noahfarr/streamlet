@@ -66,16 +66,15 @@ class WandbLogger:
 
         rows: list[dict[int, dict]] = [{} for _ in self.runs]
         for k, v in data.items():
-            v = np.asarray(v)
-            _, length = v.shape
-            grid = start + (np.arange(length) + 1) * span // length
-            seed_idx, time_idx = np.nonzero(np.isfinite(v))
-            for seed, step, value in zip(
-                seed_idx.tolist(),
-                grid[time_idx].tolist(),
-                v[seed_idx, time_idx].tolist(),
-            ):
-                rows[seed].setdefault(step, {})[k] = value
+            for seed, row in enumerate(v):
+                row = np.asarray(row)
+                length = len(row)
+                if length == 0:
+                    continue
+                grid = start + (np.arange(length) + 1) * span // length
+                finite = np.isfinite(row)
+                for step, value in zip(grid[finite].tolist(), row[finite].tolist()):
+                    rows[seed].setdefault(step, {})[k] = value
 
         for seed, run in self.runs.items():
             for step in sorted(rows[seed]):
