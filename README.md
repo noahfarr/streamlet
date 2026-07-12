@@ -1,5 +1,5 @@
 <h1 align="center">
-  <b>Streamlet</b><br>
+  🌊 <b>Streamlet</b><br>
   <b>Streaming Reinforcement Learning in JAX</b><br>
 </h1>
 
@@ -15,9 +15,9 @@ Most deep RL is built around large replay buffers and big batched updates. `Stre
 
 | | Details |
 |---|---|
-| 🤖 **Algorithms** | [Q(λ)](https://arxiv.org/abs/2410.14606), [AC(λ)](https://arxiv.org/abs/2410.14606), [SARSA(λ)](https://arxiv.org/abs/2410.14606), [TD(λ)](https://arxiv.org/abs/2410.14606), [QRC(λ)](https://arxiv.org/abs/2507.09087), [AVG(λ)](https://arxiv.org/abs/2411.15370), soft (entropy-regularized) Q(λ)/AC(λ), and recurrent Q(λ)/AC(λ)/QRC(λ)/TD(λ) for POMDPs — all online, with eligibility traces and no replay buffer |
+| 🤖 **Algorithms** | [Q(λ)](https://arxiv.org/abs/2410.14606), [AC(λ)](https://arxiv.org/abs/2410.14606), [SARSA(λ)](https://arxiv.org/abs/2410.14606), [TD(λ)](https://arxiv.org/abs/2410.14606), [QRC(λ)](https://arxiv.org/abs/2507.09087), [AVG(λ)](https://arxiv.org/abs/2411.15370), soft (entropy-regularized) Q(λ)/AC(λ), and recurrent Q(λ)/AC(λ)/QRC(λ)/TD(λ) for POMDPs, all online, with eligibility traces and no replay buffer |
 | ⚙️ **Optimizers** | [ObGD](https://arxiv.org/abs/2410.14606), [`Adaptive`](https://arxiv.org/abs/2605.06764), [`Implicit`](https://arxiv.org/abs/2505.01361), [`Intentional`](https://arxiv.org/abs/2604.19033), `Calibrated`, `AlphaBound`, and an [`optax`](https://github.com/google-deepmind/optax) wrapper for standard optimizers |
-| 🎮 **Environments** | [Gymnax](https://github.com/RobertTLange/gymnax), [Brax](https://github.com/google/brax), [ALE](https://github.com/Farama-Foundation/Arcade-Learning-Environment), [Gymnasium](https://github.com/Farama-Foundation/Gymnasium), [Craftax](https://github.com/MichaelTMatthews/Craftax), [PufferLib](https://github.com/PufferAI/PufferLib), a native MinAtar reimplementation, an Animax prediction-benchmark namespace, and the built-in [ETT](https://github.com/zhouhaoyi/ETDataset) time-series prediction dataset — all behind a single `make("namespace::env_id")` entry point |
+| 🎮 **Environments** | [Gymnax](https://github.com/RobertTLange/gymnax), [Brax](https://github.com/google/brax), [ALE](https://github.com/Farama-Foundation/Arcade-Learning-Environment), [Gymnasium](https://github.com/Farama-Foundation/Gymnasium), [Craftax](https://github.com/MichaelTMatthews/Craftax), [PufferLib](https://github.com/PufferAI/PufferLib), a native MinAtar reimplementation, an Animax prediction-benchmark namespace, and the built-in [ETT](https://github.com/zhouhaoyi/ETDataset) time-series prediction dataset, all behind a single `make("namespace::env_id")` entry point |
 | 🧰 **Wrappers** | Observation / reward normalization, observation traces, episode-statistics recording, sticky actions |
 | 📊 **Logging** | In-graph structured logging via [`lox`](https://github.com/huterguier/lox), plus `streamlet.loggers` for a live terminal dashboard, Weights & Biases, and checkpointing |
 
