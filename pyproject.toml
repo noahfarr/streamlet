@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gymnasium = ["gymnasium"]
+gymnasium = ["gymnasium", "gymnasium-ffi ; python_version >= '3.13'"]
 ale       = ["ale-py[gymnasium]"]
 ett  = ["matplotlib"]
 cluster   = ["slurmpilot"]
@@ -35,6 +35,7 @@ craftax   = ["craftax"]
 lox = { git = "https://github.com/huterguier/lox", branch = "dev" }
 animax = { git = "ssh://git@github.com/noahfarr/blinx.git" }
 slurmpilot = { git = "ssh://git@github.com/noahfarr/slurmpilot.git", branch = "feat/spignore" }
+gymnasium-ffi = { git = "ssh://git@github.com/noahfarr/gymnasium-ffi.git" }
 
 [dependency-groups]
 dev = [

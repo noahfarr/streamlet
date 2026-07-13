@@ -15,7 +15,9 @@ class GymnasiumState:
 
 class GymnasiumWrapper:
     def __init__(self, environment, batch_shape: tuple[int, ...] = (1,)):
-        self._environment = environment
+        import gymnasium_ffi
+
+        self._environment = gymnasium_ffi.VectorEnv(environment)
         self.batch_shape = tuple(batch_shape)
 
         observation_space = environment.single_observation_space
@@ -37,21 +39,10 @@ class GymnasiumWrapper:
         return None
 
     def reset(self, key: Key, params=None) -> tuple[Array, GymnasiumState]:
+        bits = jax.random.key_data(key).sum().astype(jnp.int32)
+        seed = 0 * bits - 1
 
-        def _reset(key):
-            observation, _ = self._environment.reset()
-            observation = np.reshape(
-                observation, self.batch_shape + self.observation_shape
-            )
-            return jnp.array(observation, dtype=self.observation_dtype)
-
-        observation = jax.pure_callback(
-            _reset,
-            jax.ShapeDtypeStruct(self.observation_shape, self.observation_dtype),
-            key,
-            vmap_method="broadcast_all",
-        )
-
+        observation = self._environment.reset(seed)
         state = GymnasiumState(step=0)
         return observation, state
 
@@ -62,41 +53,10 @@ class GymnasiumWrapper:
         action: Array,
         params=None,
     ) -> tuple[Array, GymnasiumState, Array, Array, dict]:
-
-        def _step(action):
-            if self.discrete:
-                action = np.asarray(action, dtype=np.int32).reshape((-1,))
-            else:
-                action = np.asarray(action, dtype=np.float32).reshape(
-                    (-1,) + self.action_shape
-                )
-                action = np.clip(action, self._action_low, self._action_high)
-
-            observation, rewards, terminations, truncations, infos = (
-                self._environment.step(action)
-            )
-
-            observation = np.reshape(
-                observation, self.batch_shape + self.observation_shape
-            )
-            rewards = np.reshape(rewards, self.batch_shape)
-            dones = np.reshape(terminations | truncations, self.batch_shape)
-            return (
-                jnp.array(observation, dtype=self.observation_dtype),
-                jnp.array(rewards, dtype=jnp.float32),
-                jnp.array(dones, dtype=jnp.bool_),
-            )
-
-        observation, rewards, dones = jax.pure_callback(
-            _step,
-            (
-                jax.ShapeDtypeStruct(self.observation_shape, self.observation_dtype),
-                jax.ShapeDtypeStruct((), jnp.float32),
-                jax.ShapeDtypeStruct((), jnp.bool_),
-            ),
-            action,
-            vmap_method="broadcast_all",
+        observation, rewards, terminations, truncations = self._environment.step(
+            action
         )
+        dones = terminations | truncations
 
         new_state = GymnasiumState(step=state.step + 1)
         return observation, new_state, rewards, dones, {}
