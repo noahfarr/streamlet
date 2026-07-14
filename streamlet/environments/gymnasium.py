@@ -82,7 +82,14 @@ class GymnasiumWrapper:
 
 def make(env_id, batch_shape: tuple[int, ...] = (1,), **kwargs) -> tuple:
     import gymnasium
+    from gymnasium.vector import AutoresetMode
 
     num_envs = int(np.prod(batch_shape))
-    environment = gymnasium.make_vec(env_id, num_envs=num_envs, **kwargs)
+    vector_kwargs = {
+        "autoreset_mode": AutoresetMode.SAME_STEP,
+        **kwargs.pop("vector_kwargs", {}),
+    }
+    environment = gymnasium.make_vec(
+        env_id, num_envs=num_envs, vector_kwargs=vector_kwargs, **kwargs
+    )
     return GymnasiumWrapper(environment, batch_shape=batch_shape), None
