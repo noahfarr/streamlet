@@ -97,31 +97,6 @@ class RecurrentACLambda:
         ((next_carry, log_prob, entropy, value), vjp, action) = jax.vjp(
             forward, state.params, has_aux=True
         )
-        carry_bar = jax.tree.map(jnp.zeros_like, next_carry)
-        (log_prob_grads,) = vjp(
-            (
-                carry_bar,
-                jnp.ones_like(log_prob),
-                jnp.zeros_like(entropy),
-                jnp.zeros_like(value),
-            )
-        )
-        (entropy_grads,) = vjp(
-            (
-                carry_bar,
-                jnp.zeros_like(log_prob),
-                jnp.ones_like(entropy),
-                jnp.zeros_like(value),
-            )
-        )
-        (critic_grads,) = vjp(
-            (
-                carry_bar,
-                jnp.zeros_like(log_prob),
-                jnp.zeros_like(entropy),
-                jnp.ones_like(value),
-            )
-        )
 
         next_obs, env_state, reward, done, info = self.env.step(
             step_key, state.env_state, action, self.env_params
@@ -135,10 +110,8 @@ class RecurrentACLambda:
             aux={
                 "log_prob": log_prob,
                 "entropy": entropy,
-                "log_prob_grads": log_prob_grads,
-                "entropy_grads": entropy_grads,
                 "critic_value": value,
-                "critic_grads": critic_grads,
+                "vjp": vjp,
                 "next_carry": next_carry,
             },
         )
@@ -165,11 +138,19 @@ class RecurrentACLambda:
     ) -> RecurrentACLambdaState:
         log_prob = transition.aux["log_prob"]
         entropy = transition.aux["entropy"]
-        log_prob_grads = transition.aux["log_prob_grads"]
-        entropy_grads = transition.aux["entropy_grads"]
         critic_value = transition.aux["critic_value"]
-        critic_grads = transition.aux["critic_grads"]
+        vjp = transition.aux["vjp"]
         next_carry = transition.aux["next_carry"]
+
+        carry_bar = jax.tree.map(jnp.zeros_like, next_carry)
+        (critic_grads,) = vjp(
+            (
+                carry_bar,
+                jnp.zeros_like(log_prob),
+                jnp.zeros_like(entropy),
+                jnp.ones_like(critic_value),
+            )
+        )
 
         critic_trace = jax.tree.map(
             lambda trace, grad: self.cfg.gamma * self.cfg.trace_lambda * trace + grad,
@@ -196,11 +177,14 @@ class RecurrentACLambda:
             - remove_feature_axis(critic_value)
         )
 
-        actor_grads = jax.tree.map(
-            lambda lpg, eg: lpg
-            + jnp.sign(td_error) * self.cfg.entropy_coefficient * eg,
-            log_prob_grads,
-            entropy_grads,
+        (actor_grads,) = vjp(
+            (
+                carry_bar,
+                jnp.ones_like(log_prob),
+                jnp.sign(td_error) * self.cfg.entropy_coefficient
+                * jnp.ones_like(entropy),
+                jnp.zeros_like(critic_value),
+            )
         )
         actor_trace = jax.tree.map(
             lambda trace, grad: self.cfg.gamma * self.cfg.trace_lambda * trace + grad,
