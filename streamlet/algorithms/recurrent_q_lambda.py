@@ -33,7 +33,7 @@ class RecurrentQLambdaState:
     timestep: Timestep
     carry: PyTree
     env_state: EnvState
-    q_params: core.FrozenDict[str, Any]
+    params: core.FrozenDict[str, Any]
     q_trace: PyTree
     q_optimizer_state: PyTree
 
@@ -81,7 +81,7 @@ class RecurrentQLambda:
             lambda params: self.q_network.apply(
                 params, state.carry, *state.timestep, mutable=["intermediates"]
             ),
-            state.q_params,
+            state.params,
         )
         greedy_action = jnp.argmax(q_values, axis=-1)
 
@@ -155,7 +155,7 @@ class RecurrentQLambda:
 
         next_q_value, curvature = self.q_optimizer.bootstrap(
             state.q_optimizer_state,
-            state.q_params,
+            state.params,
             q_grads,
             q_trace,
             lambda params: self.q_network.apply(params, next_carry, *transition.second)[
@@ -177,11 +177,11 @@ class RecurrentQLambda:
             curvature,
         )
 
-        q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
+        params = jax.tree.map(lambda p, u: p + u, state.params, q_updates)
 
         if self.aux_loss is not None:
             _, next_intermediates = self.q_network.apply(
-                state.q_params, next_carry, *transition.second, mutable=["intermediates"]
+                state.params, next_carry, *transition.second, mutable=["intermediates"]
             )
             transition = transition.replace(
                 aux={**transition.aux, "next_intermediates": next_intermediates}
@@ -195,7 +195,7 @@ class RecurrentQLambda:
                 (jax.tree.map(jnp.zeros_like, next_carry), jnp.zeros_like(q_values)),
                 cotangents,
             ))
-            q_params = jax.tree.map(lambda p, g: p - g, q_params, aux_grads)
+            params = jax.tree.map(lambda p, g: p - g, params, aux_grads)
 
         q_trace = jax.tree.map(
             lambda t: jnp.where(
@@ -213,7 +213,7 @@ class RecurrentQLambda:
         )
 
         return state.replace(
-            q_params=q_params,
+            params=params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
         )
@@ -231,18 +231,18 @@ class RecurrentQLambda:
         )
 
         carry = self.q_network.initialize_carry(carry_key)
-        q_params = self.q_network.init(q_key, carry, *timestep)
+        params = self.q_network.init(q_key, carry, *timestep)
 
-        q_optimizer_state = self.q_optimizer.init(q_params)
+        q_optimizer_state = self.q_optimizer.init(params)
 
-        q_trace = jax.tree.map(jnp.zeros_like, q_params)
+        q_trace = jax.tree.map(jnp.zeros_like, params)
 
         return RecurrentQLambdaState(
             step=0,
             timestep=timestep,
             carry=carry,
             env_state=env_state,
-            q_params=q_params,
+            params=params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
         )

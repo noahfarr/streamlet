@@ -34,7 +34,7 @@ class SoftQLambdaState:
     step: int
     timestep: Timestep
     env_state: EnvState
-    q_params: core.FrozenDict[str, Any]
+    params: core.FrozenDict[str, Any]
     q_trace: PyTree
     q_optimizer_state: PyTree
 
@@ -84,7 +84,7 @@ class SoftQLambda:
             lambda params: self.q_network.apply(
                 params, state.timestep.obs, mutable=["intermediates"]
             ),
-            state.q_params,
+            state.params,
         )
         greedy_action = jnp.argmax(q_values, axis=-1)
 
@@ -153,7 +153,7 @@ class SoftQLambda:
 
         next_value, curvature = self.q_optimizer.bootstrap(
             state.q_optimizer_state,
-            state.q_params,
+            state.params,
             q_grads,
             q_trace,
             lambda params: self.soft_value(
@@ -175,11 +175,11 @@ class SoftQLambda:
             curvature,
         )
 
-        q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
+        params = jax.tree.map(lambda p, u: p + u, state.params, q_updates)
 
         if self.aux_loss is not None:
             _, next_intermediates = self.q_network.apply(
-                state.q_params, transition.second.obs, mutable=["intermediates"]
+                state.params, transition.second.obs, mutable=["intermediates"]
             )
             transition = transition.replace(
                 aux={**transition.aux, "next_intermediates": next_intermediates}
@@ -190,7 +190,7 @@ class SoftQLambda:
                 )
             )(intermediates)
             (aux_grads,) = q_vjp((jnp.zeros_like(q_values), cotangents))
-            q_params = jax.tree.map(lambda p, g: p - g, q_params, aux_grads)
+            params = jax.tree.map(lambda p, g: p - g, params, aux_grads)
 
         q_trace = jax.tree.map(
             lambda t: jnp.where(
@@ -210,7 +210,7 @@ class SoftQLambda:
         )
 
         return state.replace(
-            q_params=q_params,
+            params=params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
         )
@@ -224,17 +224,17 @@ class SoftQLambda:
             dtype=canonicalize_dtype(action_space.dtype),
         )
         timestep = Timestep(obs=obs, action=action, reward=0.0, done=True)
-        q_params = self.q_network.init(q_key, obs)
+        params = self.q_network.init(q_key, obs)
 
-        q_optimizer_state = self.q_optimizer.init(q_params)
+        q_optimizer_state = self.q_optimizer.init(params)
 
-        q_trace = jax.tree.map(jnp.zeros_like, q_params)
+        q_trace = jax.tree.map(jnp.zeros_like, params)
 
         return SoftQLambdaState(
             step=0,
             timestep=timestep,
             env_state=env_state,
-            q_params=q_params,
+            params=params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
         )

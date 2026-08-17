@@ -34,7 +34,7 @@ class QRCLambdaState:
     step: int
     timestep: Timestep
     env_state: EnvState
-    q_params: core.FrozenDict[str, Any]
+    params: core.FrozenDict[str, Any]
     h_params: core.FrozenDict[str, Any]
     q_optimizer_state: PyTree
     h_optimizer_state: PyTree
@@ -93,7 +93,7 @@ class QRCLambda:
             lambda params: self.q_network.apply(
                 params, state.timestep.obs, mutable=["intermediates"]
             ),
-            state.q_params,
+            state.params,
         )
         greedy_action = jnp.argmax(q_values, axis=-1)
 
@@ -157,7 +157,7 @@ class QRCLambda:
             lambda params: self.q_network.apply(params, transition.second.obs).max(
                 axis=-1
             ),
-            state.q_params,
+            state.params,
         )
         (next_q_value_grads,) = nv_vjp(jnp.ones_like(next_q_value))
 
@@ -257,11 +257,11 @@ class QRCLambda:
                 state.q_optimizer_state, jax.tree.map(lambda u: -u, q_updates)
             )
 
-        q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_param_updates)
+        params = jax.tree.map(lambda p, u: p + u, state.params, q_param_updates)
 
         if self.aux_q_loss is not None:
             _, next_intermediates = self.q_network.apply(
-                state.q_params, transition.second.obs, mutable=["intermediates"]
+                state.params, transition.second.obs, mutable=["intermediates"]
             )
             transition = transition.replace(
                 aux={**transition.aux, "next_intermediates": next_intermediates}
@@ -272,8 +272,8 @@ class QRCLambda:
                 )
             )(intermediates)
             (aux_q_grads,) = q_vjp((jnp.zeros_like(q_values), cotangents))
-            q_params = jax.tree.map(
-                lambda p, g: p - g, q_params, aux_q_grads
+            params = jax.tree.map(
+                lambda p, g: p - g, params, aux_q_grads
             )
 
         target_q_value = q_value + td_error
@@ -306,7 +306,7 @@ class QRCLambda:
         )
 
         return state.replace(
-            q_params=q_params,
+            params=params,
             h_params=h_params,
             q_optimizer_state=q_optimizer_state,
             h_optimizer_state=h_optimizer_state,
@@ -324,12 +324,12 @@ class QRCLambda:
         )
         timestep = Timestep(obs=obs, action=action, reward=0.0, done=True)
 
-        q_params = self.q_network.init(q_key, obs)
+        params = self.q_network.init(q_key, obs)
         h_params = self.h_network.init(h_key, obs)
-        q_optimizer_state = self.q_optimizer.init(q_params)
+        q_optimizer_state = self.q_optimizer.init(params)
         h_optimizer_state = self.h_optimizer.init(h_params)
 
-        q_trace = jax.tree.map(jnp.zeros_like, q_params)
+        q_trace = jax.tree.map(jnp.zeros_like, params)
         h_trace = jax.tree.map(jnp.zeros_like, h_params)
         bias_trace = jnp.float32(0.0)
 
@@ -337,7 +337,7 @@ class QRCLambda:
             step=0,
             timestep=timestep,
             env_state=env_state,
-            q_params=q_params,
+            params=params,
             h_params=h_params,
             q_optimizer_state=q_optimizer_state,
             h_optimizer_state=h_optimizer_state,

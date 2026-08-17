@@ -33,7 +33,7 @@ class SARSALambdaState:
     timestep: Timestep
     next_action: Array
     env_state: EnvState
-    q_params: core.FrozenDict[str, Any]
+    params: core.FrozenDict[str, Any]
     q_trace: PyTree
     q_optimizer_state: PyTree
 
@@ -75,7 +75,7 @@ class SARSALambda:
             lambda params: self.q_network.apply(
                 params, state.timestep.obs, mutable=["intermediates"]
             ),
-            state.q_params,
+            state.params,
         )
 
         next_obs, env_state, reward, done, info = self.env.step(
@@ -91,7 +91,7 @@ class SARSALambda:
             minval=0,
             maxval=action_space.n,
         )
-        next_q_values = self.q_network.apply(state.q_params, next_obs)
+        next_q_values = self.q_network.apply(state.params, next_obs)
         greedy_action = jnp.argmax(next_q_values, axis=-1)
 
         epsilon = self.epsilon_schedule(state.step + 1)
@@ -150,7 +150,7 @@ class SARSALambda:
 
         next_q_value, curvature = self.q_optimizer.bootstrap(
             state.q_optimizer_state,
-            state.q_params,
+            state.params,
             q_grads,
             q_trace,
             lambda params: self.q_network.apply(params, transition.second.obs)[
@@ -168,11 +168,11 @@ class SARSALambda:
             state.q_optimizer_state, q_grads, q_trace, td_error, curvature,
         )
 
-        q_params = jax.tree.map(lambda p, u: p + u, state.q_params, q_updates)
+        params = jax.tree.map(lambda p, u: p + u, state.params, q_updates)
 
         if self.aux_loss is not None:
             _, next_intermediates = self.q_network.apply(
-                state.q_params, transition.second.obs, mutable=["intermediates"]
+                state.params, transition.second.obs, mutable=["intermediates"]
             )
             transition = transition.replace(
                 aux={**transition.aux, "next_intermediates": next_intermediates}
@@ -183,7 +183,7 @@ class SARSALambda:
                 )
             )(intermediates)
             (aux_grads,) = q_vjp((jnp.zeros_like(q_values), cotangents))
-            q_params = jax.tree.map(lambda p, g: p - g, q_params, aux_grads)
+            params = jax.tree.map(lambda p, g: p - g, params, aux_grads)
 
         q_trace = jax.tree.map(
             lambda t: jnp.where(transition.second.done, jnp.zeros_like(t), t), q_trace
@@ -199,7 +199,7 @@ class SARSALambda:
         )
 
         return state.replace(
-            q_params=q_params,
+            params=params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
         )
@@ -212,11 +212,11 @@ class SARSALambda:
             action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
         )
         timestep = Timestep(obs=obs, action=action, reward=0.0, done=True)
-        q_params = self.q_network.init(q_key, obs)
+        params = self.q_network.init(q_key, obs)
 
-        q_optimizer_state = self.q_optimizer.init(q_params)
+        q_optimizer_state = self.q_optimizer.init(params)
 
-        q_trace = jax.tree.map(jnp.zeros_like, q_params)
+        q_trace = jax.tree.map(jnp.zeros_like, params)
 
         next_action = jax.random.randint(
             action_key, action_space.shape, minval=0, maxval=action_space.n
@@ -227,7 +227,7 @@ class SARSALambda:
             timestep=timestep,
             next_action=next_action,
             env_state=env_state,
-            q_params=q_params,
+            params=params,
             q_trace=q_trace,
             q_optimizer_state=q_optimizer_state,
         )
@@ -254,7 +254,7 @@ class SARSALambda:
         obs, env_state = self.env.reset(reset_key, self.env_params)
 
         action_space = self.env.action_space(self.env_params)
-        first_action = jnp.argmax(self.q_network.apply(state.q_params, obs), axis=-1)
+        first_action = jnp.argmax(self.q_network.apply(state.params, obs), axis=-1)
         state = state.replace(
             step=0,
             timestep=Timestep(
@@ -274,7 +274,7 @@ class SARSALambda:
                 key, state.env_state, state.next_action, self.env_params
             )
             next_action = jnp.argmax(
-                self.q_network.apply(state.q_params, next_obs), axis=-1
+                self.q_network.apply(state.params, next_obs), axis=-1
             )
             return (
                 state.replace(
