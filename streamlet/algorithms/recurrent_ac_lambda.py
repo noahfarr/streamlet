@@ -5,7 +5,6 @@ import jax
 import jax.numpy as jnp
 import lox
 from flax import struct
-from jax.flatten_util import ravel_pytree
 
 from streamlet.optimizers import Optimizer
 from streamlet.utils import Timestep, Transition, canonicalize_dtype
@@ -57,24 +56,6 @@ class RecurrentACLambda:
             f"unroll must be >= 1, got {self.cfg.unroll}."
         )
 
-        observation_space = self.env.observation_space(self.env_params)
-        action_space = self.env.action_space(self.env_params)
-        timestep = Timestep(
-            obs=jnp.zeros(
-                observation_space.shape,
-                dtype=canonicalize_dtype(observation_space.dtype),
-            ),
-            action=jnp.zeros(
-                action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
-            ),
-            reward=jnp.float32(0.0),
-            done=jnp.bool_(True),
-        )
-        carry = self.network.initialize_carry(jax.random.key(0))
-        _, self.unravel = ravel_pytree(
-            self.network.init(jax.random.key(0), carry, *timestep)
-        )
-
     def env_step(
         self, state: RecurrentACLambdaState, key: Key, temperature: Array
     ) -> tuple[RecurrentACLambdaState, Transition]:
@@ -82,7 +63,7 @@ class RecurrentACLambda:
 
         def forward(params):
             next_carry, (dist, value) = self.network.apply(
-                self.unravel(params), state.carry, *state.timestep
+                params, state.carry, *state.timestep
             )
             action, _ = dist.sample_and_log_prob(seed=action_key)
             action = jnp.where(temperature == 0.0, dist.mode(), action)
@@ -164,9 +145,7 @@ class RecurrentACLambda:
             critic_grads,
             critic_trace,
             lambda params: remove_feature_axis(
-                self.network.apply(self.unravel(params), next_carry, *transition.second)[
-                    1
-                ][1]
+                self.network.apply(params, next_carry, *transition.second)[1][1]
             ),
             self.cfg.gamma,
             1.0 - transition.second.done.astype(jnp.float32),
@@ -253,7 +232,7 @@ class RecurrentACLambda:
         )
 
         carry = self.network.initialize_carry(carry_key)
-        params, _ = ravel_pytree(self.network.init(params_key, carry, *timestep))
+        params = self.network.init(params_key, carry, *timestep)
 
         actor_optimizer_state = self.actor_optimizer.init(params)
         critic_optimizer_state = self.critic_optimizer.init(params)

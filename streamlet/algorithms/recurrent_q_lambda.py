@@ -1,11 +1,11 @@
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Callable
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import lox
-from flax import core, struct
+from flax import struct
 
 from streamlet.optimizers import Optimizer
 from streamlet.utils import Timestep, Transition, canonicalize_dtype
@@ -33,8 +33,8 @@ class RecurrentQLambdaState:
     timestep: Timestep
     carry: PyTree
     env_state: EnvState
-    params: core.FrozenDict[str, Any]
-    q_trace: PyTree
+    params: Array
+    q_trace: Array
     q_optimizer_state: PyTree
 
 
