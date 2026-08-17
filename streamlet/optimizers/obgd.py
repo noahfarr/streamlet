@@ -32,10 +32,12 @@ class ObGD:
     name: str = "obgd"
 
     def init(self, parameters: PyTree) -> ObGDState:
-        second_moment = jax.tree.map(
-            lambda p: jnp.zeros(p.shape, dtype=self.cfg.dtype),
-            parameters,
-        )
+        second_moment = None
+        if self.cfg.adaptive:
+            second_moment = jax.tree.map(
+                lambda p: jnp.zeros(p.shape, dtype=self.cfg.dtype),
+                parameters,
+            )
         return ObGDState(second_moment=second_moment, t_step=jnp.int32(0))
 
     def bootstrap(self, state, params, gradient, trace, bootstrap_fn, gamma, not_done):
