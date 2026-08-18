@@ -190,7 +190,7 @@ def step_agent(action: jax.Array, state: EnvState, params: EnvParams) -> EnvStat
     e_bullet_map = jnp.roll(state.e_bullet_map, 1, axis=0)
     e_bullet_map = e_bullet_map.at[0, :].set(0)
 
-    bullet_terminal = e_bullet_map[9, state.pos]
+    bullet_terminal = e_bullet_map[9, pos]
     terminal = jnp.logical_or(state.terminal, bullet_terminal)
     return state.replace(
         pos=pos,
