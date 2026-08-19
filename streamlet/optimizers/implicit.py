@@ -24,6 +24,7 @@ class ImplicitConfig:
     use_adaptive_clip: bool = struct.field(pytree_node=False, default=True)
     use_rmsprop: bool = struct.field(pytree_node=False, default=True)
     use_sigma: bool = struct.field(pytree_node=False, default=True)
+    curvature_mode: str = struct.field(pytree_node=False, default="full")
     dtype: Any = struct.field(pytree_node=False, default=jnp.float32)
 
 
@@ -67,12 +68,22 @@ class Implicit:
 
     def bootstrap(self, state, params, gradient, trace, bootstrap_fn, gamma, not_done):
         interaction_trace = self.precondition(state, trace)
+        if self.cfg.curvature_mode == "norm":
+            curvature = sum(
+                jnp.sum(t * z)
+                for t, z in zip(
+                    jax.tree.leaves(trace), jax.tree.leaves(interaction_trace)
+                )
+            )
+            return bootstrap_fn(params), curvature
         gradient_trace = sum(
             jnp.sum(g * z)
             for g, z in zip(
                 jax.tree.leaves(gradient), jax.tree.leaves(interaction_trace)
             )
         )
+        if self.cfg.curvature_mode == "prediction":
+            return bootstrap_fn(params), gradient_trace
         next_value, pullback = jax.vjp(bootstrap_fn, params)
         (next_gradient,) = pullback(jnp.ones_like(next_value))
         next_grad_trace = sum(
