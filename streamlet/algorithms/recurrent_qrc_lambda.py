@@ -55,8 +55,8 @@ class RecurrentQRCLambda:
     q_optimizer: Optimizer
     h_optimizer: Optimizer
     epsilon_schedule: Callable
-    aux_q_loss: Callable | None = None
-    aux_h_loss: Callable | None = None
+    auxiliary_q_loss: Callable | None = None
+    auxiliary_h_loss: Callable | None = None
 
     def __post_init__(self):
         action_space = self.env.action_space(self.env_params)
@@ -227,7 +227,7 @@ class RecurrentQRCLambda:
         )
         h_params = jax.tree.map(lambda p, u: p + u, state.h_params, h_param_updates)
 
-        if self.aux_h_loss is not None:
+        if self.auxiliary_h_loss is not None:
             _, next_h_intermediates = self.h_network.apply(
                 state.h_params,
                 next_h_carry,
@@ -242,7 +242,7 @@ class RecurrentQRCLambda:
                 }
             )
             cotangents = jax.grad(
-                lambda i: self.aux_h_loss(
+                lambda i: self.auxiliary_h_loss(
                     h_transition.replace(aux={**h_transition.aux, "intermediates": i})
                 )
             )(h_intermediates)
@@ -292,7 +292,7 @@ class RecurrentQRCLambda:
 
         params = jax.tree.map(lambda p, u: p + u, state.params, q_param_updates)
 
-        if self.aux_q_loss is not None:
+        if self.auxiliary_q_loss is not None:
             _, next_q_intermediates = self.q_network.apply(
                 state.params,
                 next_q_carry,
@@ -307,7 +307,7 @@ class RecurrentQRCLambda:
                 }
             )
             cotangents = jax.grad(
-                lambda i: self.aux_q_loss(
+                lambda i: self.auxiliary_q_loss(
                     q_transition.replace(aux={**q_transition.aux, "intermediates": i})
                 )
             )(q_intermediates)

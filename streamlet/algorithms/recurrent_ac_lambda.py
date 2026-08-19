@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Callable
 
 import flax.linen as nn
 import jax
@@ -41,6 +42,7 @@ class RecurrentACLambda:
     network: nn.Module
     actor_optimizer: Optimizer
     critic_optimizer: Optimizer
+    auxiliary_loss: Callable | None = None
 
     def __post_init__(self):
         assert 0.0 <= self.cfg.gamma <= 1.0, (
@@ -62,8 +64,8 @@ class RecurrentACLambda:
         action_key, step_key = jax.random.split(key)
 
         def forward(params):
-            next_carry, (dist, value) = self.network.apply(
-                params, state.carry, *state.timestep
+            (next_carry, (dist, value)), intermediates = self.network.apply(
+                params, state.carry, *state.timestep, mutable=["intermediates"]
             )
             action, _ = dist.sample_and_log_prob(seed=action_key)
             action = jnp.where(temperature == 0.0, dist.mode(), action)
@@ -73,9 +75,10 @@ class RecurrentACLambda:
                 dist.log_prob(action),
                 dist.entropy(),
                 value,
+                intermediates,
             ), action
 
-        ((next_carry, log_prob, entropy, value), vjp, action) = jax.vjp(
+        ((next_carry, log_prob, entropy, value, intermediates), vjp, action) = jax.vjp(
             forward, state.params, has_aux=True
         )
 
@@ -94,6 +97,7 @@ class RecurrentACLambda:
                 "critic_value": value,
                 "vjp": vjp,
                 "next_carry": next_carry,
+                "intermediates": intermediates,
             },
         )
 
@@ -123,13 +127,16 @@ class RecurrentACLambda:
         vjp = transition.aux["vjp"]
         next_carry = transition.aux["next_carry"]
 
+        intermediates = transition.aux["intermediates"]
         carry_bar = jax.tree.map(jnp.zeros_like, next_carry)
+        intermediates_bar = jax.tree.map(jnp.zeros_like, intermediates)
         (critic_grads,) = vjp(
             (
                 carry_bar,
                 jnp.zeros_like(log_prob),
                 jnp.zeros_like(entropy),
                 jnp.ones_like(critic_value),
+                intermediates_bar,
             )
         )
 
@@ -163,6 +170,7 @@ class RecurrentACLambda:
                 jnp.sign(td_error) * self.cfg.entropy_coefficient
                 * jnp.ones_like(entropy),
                 jnp.zeros_like(critic_value),
+                intermediates_bar,
             )
         )
         actor_trace = jax.tree.map(
@@ -189,6 +197,27 @@ class RecurrentACLambda:
             actor_updates,
             critic_updates,
         )
+
+        if self.auxiliary_loss is not None:
+            _, next_intermediates = self.network.apply(
+                state.params, next_carry, *transition.second, mutable=["intermediates"]
+            )
+            transition = transition.replace(
+                aux={**transition.aux, "next_intermediates": next_intermediates}
+            )
+            cotangents = jax.grad(
+                lambda i: self.auxiliary_loss(
+                    transition.replace(aux={**transition.aux, "intermediates": i})
+                )
+            )(intermediates)
+            (aux_grads,) = vjp((
+                carry_bar,
+                jnp.zeros_like(log_prob),
+                jnp.zeros_like(entropy),
+                jnp.zeros_like(critic_value),
+                cotangents,
+            ))
+            params = jax.tree.map(lambda p, g: p - g, params, aux_grads)
 
         actor_trace = jax.tree.map(
             lambda t: jnp.where(transition.second.done, jnp.zeros_like(t), t),

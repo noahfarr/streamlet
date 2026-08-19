@@ -38,7 +38,7 @@ class RecurrentTDLambda:
     env_params: EnvParams
     value_network: nn.Module
     value_optimizer: Optimizer
-    aux_loss: Callable | None = None
+    auxiliary_loss: Callable | None = None
 
     def __post_init__(self):
         assert 0.0 <= self.cfg.gamma <= 1.0, (
@@ -150,7 +150,7 @@ class RecurrentTDLambda:
             lambda p, u: p + u, state.value_params, value_updates
         )
 
-        if self.aux_loss is not None:
+        if self.auxiliary_loss is not None:
             _, next_intermediates = self.value_network.apply(
                 state.value_params, next_carry, *transition.second, mutable=["intermediates"]
             )
@@ -158,7 +158,7 @@ class RecurrentTDLambda:
                 aux={**transition.aux, "next_intermediates": next_intermediates}
             )
             cotangents = jax.grad(
-                lambda i: self.aux_loss(
+                lambda i: self.auxiliary_loss(
                     transition.replace(aux={**transition.aux, "intermediates": i})
                 )
             )(intermediates)

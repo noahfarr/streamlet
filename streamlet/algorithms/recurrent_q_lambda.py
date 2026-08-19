@@ -46,7 +46,7 @@ class RecurrentQLambda:
     q_network: nn.Module
     epsilon_schedule: Callable
     q_optimizer: Optimizer
-    aux_loss: Callable | None = None
+    auxiliary_loss: Callable | None = None
 
     def __post_init__(self):
         action_space = self.env.action_space(self.env_params)
@@ -179,7 +179,7 @@ class RecurrentQLambda:
 
         params = jax.tree.map(lambda p, u: p + u, state.params, q_updates)
 
-        if self.aux_loss is not None:
+        if self.auxiliary_loss is not None:
             _, next_intermediates = self.q_network.apply(
                 state.params, next_carry, *transition.second, mutable=["intermediates"]
             )
@@ -187,7 +187,7 @@ class RecurrentQLambda:
                 aux={**transition.aux, "next_intermediates": next_intermediates}
             )
             cotangents = jax.grad(
-                lambda i: self.aux_loss(
+                lambda i: self.auxiliary_loss(
                     transition.replace(aux={**transition.aux, "intermediates": i})
                 )
             )(intermediates)
