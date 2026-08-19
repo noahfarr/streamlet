@@ -87,8 +87,13 @@ class Calibrated:
                 jax.tree.leaves(gradient), jax.tree.leaves(interaction_trace)
             )
         )
-        next_value, next_grad_trace = jax.jvp(
-            bootstrap_fn, (params,), (interaction_trace,)
+        next_value, pullback = jax.vjp(bootstrap_fn, params)
+        (next_gradient,) = pullback(jnp.ones_like(next_value))
+        next_grad_trace = sum(
+            jnp.sum(g * z)
+            for g, z in zip(
+                jax.tree.leaves(next_gradient), jax.tree.leaves(interaction_trace)
+            )
         )
         curvature = gradient_trace - gamma * not_done * next_grad_trace
         return next_value, curvature

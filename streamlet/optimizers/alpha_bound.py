@@ -35,7 +35,12 @@ class AlphaBound:
             jnp.sum(g * z)
             for g, z in zip(jax.tree.leaves(gradient), jax.tree.leaves(trace))
         )
-        next_value, next_grad_trace = jax.jvp(bootstrap_fn, (params,), (trace,))
+        next_value, pullback = jax.vjp(bootstrap_fn, params)
+        (next_gradient,) = pullback(jnp.ones_like(next_value))
+        next_grad_trace = sum(
+            jnp.sum(g * z)
+            for g, z in zip(jax.tree.leaves(next_gradient), jax.tree.leaves(trace))
+        )
         curvature = gradient_trace - gamma * not_done * next_grad_trace
         return next_value, curvature
 
