@@ -71,9 +71,9 @@ class SARSALambda:
 
         action = state.next_action
 
-        (q_values, intermediates), q_vjp = jax.vjp(
+        (q_values, auxiliary_losses), q_vjp = jax.vjp(
             lambda params: self.q_network.apply(
-                params, state.timestep.obs, mutable=["intermediates"]
+                params, state.timestep.obs, mutable=["auxiliary_losses"]
             ),
             state.params,
         )
@@ -104,7 +104,7 @@ class SARSALambda:
             aux={
                 "next_action": next_action,
                 "q_values": q_values,
-                "intermediates": intermediates,
+                "auxiliary_losses": auxiliary_losses,
                 "q_vjp": q_vjp,
             },
         )
@@ -130,7 +130,7 @@ class SARSALambda:
         action = transition.second.action
         next_action = transition.aux["next_action"]
         q_values = transition.aux["q_values"]
-        intermediates = transition.aux["intermediates"]
+        auxiliary_losses = transition.aux["auxiliary_losses"]
         q_vjp = transition.aux["q_vjp"]
         q_value = q_values[action]
 
@@ -138,7 +138,7 @@ class SARSALambda:
         (q_grads,) = q_vjp(
             (
                 jax.nn.one_hot(action, num_actions, dtype=q_values.dtype),
-                jax.tree.map(jnp.zeros_like, intermediates),
+                jax.tree.map(jnp.zeros_like, auxiliary_losses),
             )
         )
 
@@ -171,17 +171,17 @@ class SARSALambda:
         params = jax.tree.map(lambda p, u: p + u, state.params, q_updates)
 
         if self.auxiliary_loss is not None:
-            _, next_intermediates = self.q_network.apply(
-                state.params, transition.second.obs, mutable=["intermediates"]
+            _, next_auxiliary_losses = self.q_network.apply(
+                state.params, transition.second.obs, mutable=["auxiliary_losses"]
             )
             transition = transition.replace(
-                aux={**transition.aux, "next_intermediates": next_intermediates}
+                aux={**transition.aux, "next_auxiliary_losses": next_auxiliary_losses}
             )
             cotangents = jax.grad(
                 lambda i: self.auxiliary_loss(
-                    transition.replace(aux={**transition.aux, "intermediates": i})
+                    transition.replace(aux={**transition.aux, "auxiliary_losses": i})
                 )
-            )(intermediates)
+            )(auxiliary_losses)
             (aux_grads,) = q_vjp((jnp.zeros_like(q_values), cotangents))
             params = jax.tree.map(lambda p, g: p - g, params, aux_grads)
 

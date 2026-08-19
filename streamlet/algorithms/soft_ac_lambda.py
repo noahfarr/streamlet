@@ -74,29 +74,29 @@ class SoftACLambda:
         action_key, step_key = jax.random.split(key)
 
         def log_prob_and_entropy(params):
-            dist, intermediates = self.actor_network.apply(
-                params, state.timestep.obs, mutable=["intermediates"]
+            dist, auxiliary_losses = self.actor_network.apply(
+                params, state.timestep.obs, mutable=["auxiliary_losses"]
             )
             action, _ = dist.sample_and_log_prob(seed=action_key)
             action = jnp.where(temperature == 0.0, dist.mode(), action)
             action = jax.lax.stop_gradient(action)
-            return (dist.log_prob(action), dist.entropy(), intermediates), action
+            return (dist.log_prob(action), dist.entropy(), auxiliary_losses), action
 
-        (log_prob, entropy, intermediates), actor_vjp, action = jax.vjp(
+        (log_prob, entropy, auxiliary_losses), actor_vjp, action = jax.vjp(
             log_prob_and_entropy, state.actor_params, has_aux=True
         )
         (log_prob_grads,) = actor_vjp(
             (
                 jnp.ones_like(log_prob),
                 jnp.zeros_like(entropy),
-                jax.tree.map(jnp.zeros_like, intermediates),
+                jax.tree.map(jnp.zeros_like, auxiliary_losses),
             )
         )
         (entropy_grads,) = actor_vjp(
             (
                 jnp.zeros_like(log_prob),
                 jnp.ones_like(entropy),
-                jax.tree.map(jnp.zeros_like, intermediates),
+                jax.tree.map(jnp.zeros_like, auxiliary_losses),
             )
         )
 
@@ -114,7 +114,7 @@ class SoftACLambda:
                 "entropy": entropy,
                 "log_prob_grads": log_prob_grads,
                 "entropy_grads": entropy_grads,
-                "intermediates": intermediates,
+                "auxiliary_losses": auxiliary_losses,
                 "actor_vjp": actor_vjp,
             },
         )
@@ -142,17 +142,17 @@ class SoftACLambda:
         entropy = transition.aux["entropy"]
         log_prob_grads = transition.aux["log_prob_grads"]
         entropy_grads = transition.aux["entropy_grads"]
-        actor_intermediates = transition.aux["intermediates"]
+        actor_auxiliary_losses = transition.aux["auxiliary_losses"]
         actor_vjp = transition.aux["actor_vjp"]
 
-        (critic_value, critic_intermediates), critic_vjp = jax.vjp(
+        (critic_value, critic_auxiliary_losses), critic_vjp = jax.vjp(
             lambda params: self.critic_network.apply(
-                params, transition.first.obs, mutable=["intermediates"]
+                params, transition.first.obs, mutable=["auxiliary_losses"]
             ),
             state.critic_params,
         )
         (critic_grads,) = critic_vjp(
-            (jnp.ones_like(critic_value), jax.tree.map(jnp.zeros_like, critic_intermediates))
+            (jnp.ones_like(critic_value), jax.tree.map(jnp.zeros_like, critic_auxiliary_losses))
         )
 
         critic_trace = jax.tree.map(
@@ -220,17 +220,17 @@ class SoftACLambda:
         )
 
         if self.aux_actor_loss is not None:
-            _, next_intermediates = self.actor_network.apply(
-                state.actor_params, transition.second.obs, mutable=["intermediates"]
+            _, next_auxiliary_losses = self.actor_network.apply(
+                state.actor_params, transition.second.obs, mutable=["auxiliary_losses"]
             )
             actor_transition = transition.replace(
-                aux={"intermediates": actor_intermediates, "next_intermediates": next_intermediates}
+                aux={"auxiliary_losses": actor_auxiliary_losses, "next_auxiliary_losses": next_auxiliary_losses}
             )
             cotangents = jax.grad(
                 lambda i: self.aux_actor_loss(
-                    actor_transition.replace(aux={**actor_transition.aux, "intermediates": i})
+                    actor_transition.replace(aux={**actor_transition.aux, "auxiliary_losses": i})
                 )
-            )(actor_intermediates)
+            )(actor_auxiliary_losses)
             (aux_actor_grads,) = actor_vjp(
                 (jnp.zeros_like(log_prob), jnp.zeros_like(entropy), cotangents)
             )
@@ -241,17 +241,17 @@ class SoftACLambda:
             )
 
         if self.aux_critic_loss is not None:
-            _, next_intermediates = self.critic_network.apply(
-                state.critic_params, transition.second.obs, mutable=["intermediates"]
+            _, next_auxiliary_losses = self.critic_network.apply(
+                state.critic_params, transition.second.obs, mutable=["auxiliary_losses"]
             )
             critic_transition = transition.replace(
-                aux={"intermediates": critic_intermediates, "next_intermediates": next_intermediates}
+                aux={"auxiliary_losses": critic_auxiliary_losses, "next_auxiliary_losses": next_auxiliary_losses}
             )
             cotangents = jax.grad(
                 lambda i: self.aux_critic_loss(
-                    critic_transition.replace(aux={**critic_transition.aux, "intermediates": i})
+                    critic_transition.replace(aux={**critic_transition.aux, "auxiliary_losses": i})
                 )
-            )(critic_intermediates)
+            )(critic_auxiliary_losses)
             (aux_critic_grads,) = critic_vjp((jnp.zeros_like(critic_value), cotangents))
             critic_params = jax.tree.map(
                 lambda p, g: p - g,

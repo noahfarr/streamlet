@@ -59,9 +59,9 @@ class RecurrentTDLambda:
             action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
         )
 
-        ((next_carry, value), intermediates), value_vjp = jax.vjp(
+        ((next_carry, value), auxiliary_losses), value_vjp = jax.vjp(
             lambda params: self.value_network.apply(
-                params, state.carry, *state.timestep, mutable=["intermediates"]
+                params, state.carry, *state.timestep, mutable=["auxiliary_losses"]
             ),
             state.value_params,
         )
@@ -70,7 +70,7 @@ class RecurrentTDLambda:
                 jax.tree.map(jnp.zeros_like, next_carry),
                 jnp.ones_like(value),
             ),
-            jax.tree.map(jnp.zeros_like, intermediates),
+            jax.tree.map(jnp.zeros_like, auxiliary_losses),
         ))
 
         next_obs, env_state, reward, done, info = self.env.step(
@@ -85,7 +85,7 @@ class RecurrentTDLambda:
             aux={
                 "value": value,
                 "value_grads": value_grads,
-                "intermediates": intermediates,
+                "auxiliary_losses": auxiliary_losses,
                 "value_vjp": value_vjp,
                 "carry": state.carry,
                 "next_carry": next_carry,
@@ -112,7 +112,7 @@ class RecurrentTDLambda:
     ) -> RecurrentTDLambdaState:
         value = transition.aux["value"]
         value_grads = transition.aux["value_grads"]
-        intermediates = transition.aux["intermediates"]
+        auxiliary_losses = transition.aux["auxiliary_losses"]
         value_vjp = transition.aux["value_vjp"]
         next_carry = transition.aux["next_carry"]
 
@@ -151,17 +151,17 @@ class RecurrentTDLambda:
         )
 
         if self.auxiliary_loss is not None:
-            _, next_intermediates = self.value_network.apply(
-                state.value_params, next_carry, *transition.second, mutable=["intermediates"]
+            _, next_auxiliary_losses = self.value_network.apply(
+                state.value_params, next_carry, *transition.second, mutable=["auxiliary_losses"]
             )
             transition = transition.replace(
-                aux={**transition.aux, "next_intermediates": next_intermediates}
+                aux={**transition.aux, "next_auxiliary_losses": next_auxiliary_losses}
             )
             cotangents = jax.grad(
                 lambda i: self.auxiliary_loss(
-                    transition.replace(aux={**transition.aux, "intermediates": i})
+                    transition.replace(aux={**transition.aux, "auxiliary_losses": i})
                 )
-            )(intermediates)
+            )(auxiliary_losses)
             (aux_grads,) = value_vjp((
                 (jax.tree.map(jnp.zeros_like, next_carry), jnp.zeros_like(value)),
                 cotangents,

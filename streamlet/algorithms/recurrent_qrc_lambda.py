@@ -89,9 +89,9 @@ class RecurrentQRCLambda:
             maxval=action_space.n,
         )
 
-        ((next_q_carry, q_values), q_intermediates), q_vjp = jax.vjp(
+        ((next_q_carry, q_values), q_auxiliary_losses), q_vjp = jax.vjp(
             lambda params: self.q_network.apply(
-                params, state.q_carry, *state.timestep, mutable=["intermediates"]
+                params, state.q_carry, *state.timestep, mutable=["auxiliary_losses"]
             ),
             state.params,
         )
@@ -107,7 +107,7 @@ class RecurrentQRCLambda:
                 jax.tree.map(jnp.zeros_like, next_q_carry),
                 jax.nn.one_hot(action, action_space.n, dtype=q_values.dtype),
             ),
-            jax.tree.map(jnp.zeros_like, q_intermediates),
+            jax.tree.map(jnp.zeros_like, q_auxiliary_losses),
         ))
 
         next_obs, env_state, reward, done, info = self.env.step(
@@ -124,7 +124,7 @@ class RecurrentQRCLambda:
                 "q_value": q_value,
                 "q_values": q_values,
                 "q_grads": q_grads,
-                "q_intermediates": q_intermediates,
+                "q_auxiliary_losses": q_auxiliary_losses,
                 "q_vjp": q_vjp,
                 "next_q_carry": next_q_carry,
                 "h_carry": state.h_carry,
@@ -156,7 +156,7 @@ class RecurrentQRCLambda:
         q_value = transition.aux["q_value"]
         q_values = transition.aux["q_values"]
         q_grads = transition.aux["q_grads"]
-        q_intermediates = transition.aux["q_intermediates"]
+        q_auxiliary_losses = transition.aux["q_auxiliary_losses"]
         q_vjp = transition.aux["q_vjp"]
         next_q_carry = transition.aux["next_q_carry"]
         h_carry = transition.aux["h_carry"]
@@ -185,9 +185,9 @@ class RecurrentQRCLambda:
             q_grads,
         )
 
-        ((next_h_carry, h_values), h_intermediates), h_vjp = jax.vjp(
+        ((next_h_carry, h_values), h_auxiliary_losses), h_vjp = jax.vjp(
             lambda params: self.h_network.apply(
-                params, h_carry, *transition.first, mutable=["intermediates"]
+                params, h_carry, *transition.first, mutable=["auxiliary_losses"]
             ),
             state.h_params,
         )
@@ -197,7 +197,7 @@ class RecurrentQRCLambda:
                 jax.tree.map(jnp.zeros_like, next_h_carry),
                 jax.nn.one_hot(action, action_space.n, dtype=h_values.dtype),
             ),
-            jax.tree.map(jnp.zeros_like, h_intermediates),
+            jax.tree.map(jnp.zeros_like, h_auxiliary_losses),
         ))
 
         q_trace = jax.tree.map(
@@ -228,24 +228,24 @@ class RecurrentQRCLambda:
         h_params = jax.tree.map(lambda p, u: p + u, state.h_params, h_param_updates)
 
         if self.auxiliary_h_loss is not None:
-            _, next_h_intermediates = self.h_network.apply(
+            _, next_h_auxiliary_losses = self.h_network.apply(
                 state.h_params,
                 next_h_carry,
                 *transition.second,
-                mutable=["intermediates"],
+                mutable=["auxiliary_losses"],
             )
             h_transition = transition.replace(
                 aux={
                     **transition.aux,
-                    "intermediates": h_intermediates,
-                    "next_intermediates": next_h_intermediates,
+                    "auxiliary_losses": h_auxiliary_losses,
+                    "next_auxiliary_losses": next_h_auxiliary_losses,
                 }
             )
             cotangents = jax.grad(
                 lambda i: self.auxiliary_h_loss(
-                    h_transition.replace(aux={**h_transition.aux, "intermediates": i})
+                    h_transition.replace(aux={**h_transition.aux, "auxiliary_losses": i})
                 )
-            )(h_intermediates)
+            )(h_auxiliary_losses)
             (aux_h_grads,) = h_vjp((
                 (jax.tree.map(jnp.zeros_like, next_h_carry), jnp.zeros_like(h_values)),
                 cotangents,
@@ -293,24 +293,24 @@ class RecurrentQRCLambda:
         params = jax.tree.map(lambda p, u: p + u, state.params, q_param_updates)
 
         if self.auxiliary_q_loss is not None:
-            _, next_q_intermediates = self.q_network.apply(
+            _, next_q_auxiliary_losses = self.q_network.apply(
                 state.params,
                 next_q_carry,
                 *transition.second,
-                mutable=["intermediates"],
+                mutable=["auxiliary_losses"],
             )
             q_transition = transition.replace(
                 aux={
                     **transition.aux,
-                    "intermediates": q_intermediates,
-                    "next_intermediates": next_q_intermediates,
+                    "auxiliary_losses": q_auxiliary_losses,
+                    "next_auxiliary_losses": next_q_auxiliary_losses,
                 }
             )
             cotangents = jax.grad(
                 lambda i: self.auxiliary_q_loss(
-                    q_transition.replace(aux={**q_transition.aux, "intermediates": i})
+                    q_transition.replace(aux={**q_transition.aux, "auxiliary_losses": i})
                 )
-            )(q_intermediates)
+            )(q_auxiliary_losses)
             (aux_q_grads,) = q_vjp((
                 (jax.tree.map(jnp.zeros_like, next_q_carry), jnp.zeros_like(q_values)),
                 cotangents,

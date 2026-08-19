@@ -86,14 +86,14 @@ class TDLambda:
     def update_step(
         self, state: TDLambdaState, transition: Transition
     ) -> TDLambdaState:
-        (value, intermediates), value_vjp = jax.vjp(
+        (value, auxiliary_losses), value_vjp = jax.vjp(
             lambda params: self.value_network.apply(
-                params, transition.first.obs, mutable=["intermediates"]
+                params, transition.first.obs, mutable=["auxiliary_losses"]
             ),
             state.value_params,
         )
         (value_grads,) = value_vjp(
-            (jnp.ones_like(value), jax.tree.map(jnp.zeros_like, intermediates))
+            (jnp.ones_like(value), jax.tree.map(jnp.zeros_like, auxiliary_losses))
         )
 
         value_trace = jax.tree.map(
@@ -131,17 +131,17 @@ class TDLambda:
         )
 
         if self.auxiliary_loss is not None:
-            _, next_intermediates = self.value_network.apply(
-                state.value_params, transition.second.obs, mutable=["intermediates"]
+            _, next_auxiliary_losses = self.value_network.apply(
+                state.value_params, transition.second.obs, mutable=["auxiliary_losses"]
             )
             transition = transition.replace(
-                aux={"intermediates": intermediates, "next_intermediates": next_intermediates}
+                aux={"auxiliary_losses": auxiliary_losses, "next_auxiliary_losses": next_auxiliary_losses}
             )
             cotangents = jax.grad(
                 lambda i: self.auxiliary_loss(
-                    transition.replace(aux={**transition.aux, "intermediates": i})
+                    transition.replace(aux={**transition.aux, "auxiliary_losses": i})
                 )
-            )(intermediates)
+            )(auxiliary_losses)
             (aux_grads,) = value_vjp((jnp.zeros_like(value), cotangents))
             value_params = jax.tree.map(lambda p, g: p - g, value_params, aux_grads)
 
