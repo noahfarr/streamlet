@@ -251,7 +251,7 @@ class SMGLambda:
             )
             return flatten_carry(carry)
 
-        action_sensitivity = jax.jacrev(carry_of_previous_action)(
+        action_sensitivity = jax.jacfwd(carry_of_previous_action)(
             transition.first.action
         )
 
