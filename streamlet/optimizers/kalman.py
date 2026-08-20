@@ -21,6 +21,7 @@ class KalmanConfig:
     diagonal: bool = struct.field(pytree_node=False, default=False)
     prior_scale: float = 1.0
     sigma_mode: str = struct.field(pytree_node=False, default="residual")
+    precondition: bool = struct.field(pytree_node=False, default=False)
     dtype: Any = struct.field(pytree_node=False, default=jnp.float32)
 
 
@@ -125,8 +126,25 @@ class Kalman:
                 sigma_sq = jnp.maximum(
                     delta_sq_hat - v_hat, cfg.sigma_floor * delta_sq_hat
                 )
+            if cfg.precondition:
+                weighted_interaction = sum(
+                    jnp.sum(jnp.square(m) * z * d)
+                    for m, z, d in zip(
+                        jax.tree.leaves(state.m),
+                        jax.tree.leaves(trace),
+                        jax.tree.leaves(delta_g),
+                    )
+                )
+                direction_sq = sum(
+                    jnp.sum(jnp.square(m * z))
+                    for m, z in zip(
+                        jax.tree.leaves(state.m), jax.tree.leaves(trace)
+                    )
+                )
+            else:
+                direction_sq = trace_sq
             gain = jnp.maximum(weighted_interaction, 0.0)
-            denominator = (v + sigma_sq) * trace_sq + cfg.eps
+            denominator = (v + sigma_sq) * direction_sq + cfg.eps
             alpha = jnp.minimum(gain / denominator, cfg.alpha_max)
             m = jax.tree.map(
                 lambda mi, d: jnp.maximum(
@@ -162,7 +180,12 @@ class Kalman:
             m = jnp.maximum(state.m - reduction + cfg.process_noise, cfg.eps)
 
         scale = alpha * td_error
-        updates = jax.tree.map(lambda z: (scale * z).astype(cfg.dtype), trace)
+        if cfg.diagonal and cfg.precondition:
+            updates = jax.tree.map(
+                lambda m, z: (scale * m * z).astype(cfg.dtype), state.m, trace
+            )
+        else:
+            updates = jax.tree.map(lambda z: (scale * z).astype(cfg.dtype), trace)
 
         new_state = KalmanState(
             m=m,
