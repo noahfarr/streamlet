@@ -313,7 +313,9 @@ class SMGLambda:
         action = jnp.zeros(
             action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
         )
-        timestep = Timestep(obs=obs, action=action, reward=0.0, done=True)
+        timestep = Timestep(
+            obs=obs, action=action, reward=jnp.float32(0.0), done=jnp.bool_(True)
+        )
 
         actor_carry = self.actor_network.initialize_carry(actor_carry_key)
         critic_carry = self.critic_network.initialize_carry(critic_carry_key)
@@ -378,8 +380,8 @@ class SMGLambda:
                 action=jnp.zeros(
                     action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
                 ),
-                reward=0.0,
-                done=True,
+                reward=jnp.float32(0.0),
+                done=jnp.bool_(True),
             ),
             env_state=env_state,
             actor_carry=self.actor_network.initialize_carry(actor_carry_key),
