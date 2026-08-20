@@ -93,9 +93,9 @@ class SMGLambda:
 
         actor_carry, dist = actor_forward(state.actor_params)
         action, log_prob = dist.sample_and_log_prob(seed=sample_key)
-        mode = dist.mode()
-        action = jnp.where(temperature == 0.0, mode, action)
-        log_prob = jnp.where(temperature == 0.0, dist.log_prob(mode), log_prob)
+        greedy = dist.bijector.forward(dist.distribution.mean())
+        action = jnp.where(temperature == 0.0, greedy, action)
+        log_prob = jnp.where(temperature == 0.0, dist.log_prob(greedy), log_prob)
 
         action_jacobian = jax.jacrev(
             lambda params: actor_forward(params)[1].sample(seed=sample_key)
@@ -159,7 +159,7 @@ class SMGLambda:
 
         def critic_forward(params, carry, timestep, action):
             carry, value = self.critic_network.apply(
-                params, carry, *timestep, query_action=action
+                params, carry, *timestep, action=action
             )
             return remove_feature_axis(value), carry
 
@@ -322,7 +322,7 @@ class SMGLambda:
 
         actor_params = self.actor_network.init(actor_key, actor_carry, *timestep)
         critic_params = self.critic_network.init(
-            critic_key, critic_carry, *timestep, query_action=action
+            critic_key, critic_carry, *timestep, action=action
         )
 
         actor_optimizer_state = self.actor_optimizer.init(actor_params)
