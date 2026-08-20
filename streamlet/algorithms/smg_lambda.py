@@ -159,7 +159,7 @@ class SMGLambda:
 
         def critic_forward(params, carry, timestep, action):
             carry, value = self.critic_network.apply(
-                params, carry, *timestep, evaluated_action=action
+                params, carry, *timestep, query_action=action
             )
             return remove_feature_axis(value), carry
 
@@ -320,7 +320,7 @@ class SMGLambda:
 
         actor_params = self.actor_network.init(actor_key, actor_carry, *timestep)
         critic_params = self.critic_network.init(
-            critic_key, critic_carry, *timestep, evaluated_action=action
+            critic_key, critic_carry, *timestep, query_action=action
         )
 
         actor_optimizer_state = self.actor_optimizer.init(actor_params)
