@@ -21,8 +21,16 @@ from streamlet.utils.typing import (
 )
 
 
+def carry_state(carry: PyTree) -> PyTree:
+    while hasattr(carry, "carry"):
+        carry = carry.carry
+    return carry
+
+
 def flatten_carry(carry: PyTree) -> Array:
-    return jnp.concatenate([leaf.reshape(-1) for leaf in jax.tree.leaves(carry)])
+    return jnp.concatenate(
+        [leaf.reshape(-1) for leaf in jax.tree.leaves(carry_state(carry))]
+    )
 
 
 @struct.dataclass(frozen=True)
@@ -215,6 +223,7 @@ class SMGLambda:
             )
         )
 
+
         memory_grads = jax.tree.map(
             lambda trace: jnp.tensordot(carry_cotangent, trace, axes=([0], [0])),
             state.memory_trace,
@@ -329,7 +338,9 @@ class SMGLambda:
         critic_optimizer_state = self.critic_optimizer.init(critic_params)
 
         critic_trace = jax.tree.map(jnp.zeros_like, critic_params)
-        carry_size = sum(leaf.size for leaf in jax.tree.leaves(critic_carry))
+        carry_size = sum(
+            leaf.size for leaf in jax.tree.leaves(carry_state(critic_carry))
+        )
         memory_trace = jax.tree.map(
             lambda p: jnp.zeros((carry_size, *p.shape)), actor_params
         )
