@@ -33,12 +33,56 @@ def flatten_carry(carry: PyTree) -> Array:
     )
 
 
+def zero_tangent(carry: PyTree) -> PyTree:
+    def leaf_tangent(leaf):
+        if jnp.issubdtype(leaf.dtype, jnp.inexact):
+            return jnp.zeros_like(leaf)
+        return jnp.zeros(leaf.shape, dtype=jax.dtypes.float0)
+
+    return jax.tree.map(leaf_tangent, carry)
+
+
+def with_carry_state(carry: PyTree, inner: PyTree) -> PyTree:
+    if hasattr(carry, "carry"):
+        return zero_tangent(carry).replace(
+            carry=with_carry_state(carry.carry, inner)
+        )
+    return inner
+
+
+def state_decay_blocks(forward: Callable, carry: PyTree) -> Array:
+    leaves, treedef = jax.tree.flatten(carry_state(carry))
+    columns = []
+    for index in range(len(leaves)):
+        selected = jax.tree.unflatten(
+            treedef,
+            [
+                jnp.ones_like(leaf) if position == index else jnp.zeros_like(leaf)
+                for position, leaf in enumerate(leaves)
+            ],
+        )
+        _, column = jax.jvp(
+            forward, (carry,), (with_carry_state(carry, selected),)
+        )
+        columns.append(column)
+    return jnp.stack(columns)
+
+
+def propagate_memory_trace(blocks: Array, trace: Array) -> Array:
+    leaves = blocks.shape[0]
+    units = blocks.shape[1] // leaves
+    return jnp.einsum(
+        "lku,lu...->ku...",
+        blocks.reshape(leaves, leaves, units),
+        trace.reshape(leaves, units, *trace.shape[1:]),
+    ).reshape(trace.shape)
+
+
 @struct.dataclass(frozen=True)
 class SMGLambdaConfig:
     gamma: float
     alpha: float
     trace_lambda: float = 0.0
-    memory_decay: float = 0.9
     memory_coefficient: float = 1.0
     unroll: int = struct.field(pytree_node=False, default=4)
 
@@ -82,9 +126,6 @@ class SMGLambda:
         )
         assert 0.0 <= self.cfg.trace_lambda <= 1.0, (
             f"trace_lambda must be in [0, 1], got {self.cfg.trace_lambda}."
-        )
-        assert 0.0 <= self.cfg.memory_decay <= 1.0, (
-            f"memory_decay must be in [0, 1], got {self.cfg.memory_decay}."
         )
         assert self.cfg.alpha >= 0.0, (
             f"alpha (entropy temperature) must be >= 0, got {self.cfg.alpha}."
@@ -255,8 +296,20 @@ class SMGLambda:
             transition.first.action
         )
 
+        def carry_of_previous_carry(previous_carry):
+            _, carry = critic_forward(
+                jax.lax.stop_gradient(state.critic_params),
+                previous_carry,
+                transition.first,
+                transition.second.action,
+            )
+            return flatten_carry(carry)
+
+        state_decay = state_decay_blocks(carry_of_previous_carry, critic_carry)
+
         memory_trace = jax.tree.map(
-            lambda trace, jacobian: self.cfg.memory_decay * not_done * trace
+            lambda trace, jacobian: not_done
+            * propagate_memory_trace(state_decay, trace)
             + jnp.tensordot(action_sensitivity, jacobian, axes=([1], [0])),
             state.memory_trace,
             action_jacobian,
