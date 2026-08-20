@@ -20,6 +20,7 @@ class KalmanConfig:
     eps: float = 1e-8
     diagonal: bool = struct.field(pytree_node=False, default=False)
     prior_scale: float = 1.0
+    sigma_mode: str = struct.field(pytree_node=False, default="residual")
     dtype: Any = struct.field(pytree_node=False, default=jnp.float32)
 
 
@@ -30,6 +31,8 @@ class KalmanState:
     dg_sq_ema: Array
     dim: Array
     step: Array
+    delta_cross_ema: Array
+    previous_delta: Array
 
 
 @dataclass
@@ -56,6 +59,8 @@ class Kalman:
             dg_sq_ema=jnp.float32(0.0),
             dim=jnp.float32(dim),
             step=jnp.int32(0),
+            delta_cross_ema=jnp.float32(0.0),
+            previous_delta=jnp.float32(0.0),
         )
 
     def bootstrap(self, state, params, gradient, trace, bootstrap_fn, gamma, not_done):
@@ -90,6 +95,10 @@ class Kalman:
             td_error
         )
         delta_sq_hat = delta_sq_ema / correction
+        delta_cross_ema = cfg.beta * state.delta_cross_ema + (1.0 - cfg.beta) * (
+            td_error * state.previous_delta
+        )
+        delta_cross_hat = delta_cross_ema / correction
 
         if cfg.diagonal:
             delta_g = curvature
@@ -107,9 +116,15 @@ class Kalman:
             )
             dg_sq_ema = cfg.beta * state.dg_sq_ema + (1.0 - cfg.beta) * v
             v_hat = dg_sq_ema / correction
-            sigma_sq = jnp.maximum(
-                delta_sq_hat - v_hat, cfg.sigma_floor * delta_sq_hat
-            )
+            if cfg.sigma_mode == "autocovariance":
+                sigma_sq = jnp.maximum(
+                    delta_sq_hat - jnp.abs(delta_cross_hat),
+                    cfg.sigma_floor * delta_sq_hat,
+                )
+            else:
+                sigma_sq = jnp.maximum(
+                    delta_sq_hat - v_hat, cfg.sigma_floor * delta_sq_hat
+                )
             gain = jnp.maximum(weighted_interaction, 0.0)
             denominator = (v + sigma_sq) * trace_sq + cfg.eps
             alpha = jnp.minimum(gain / denominator, cfg.alpha_max)
@@ -129,9 +144,15 @@ class Kalman:
             dg_sq = curvature[1]
             dg_sq_ema = cfg.beta * state.dg_sq_ema + (1.0 - cfg.beta) * dg_sq
             dg_sq_hat = dg_sq_ema / correction
-            sigma_sq = jnp.maximum(
-                delta_sq_hat - state.m * dg_sq_hat, cfg.sigma_floor * delta_sq_hat
-            )
+            if cfg.sigma_mode == "autocovariance":
+                sigma_sq = jnp.maximum(
+                    delta_sq_hat - jnp.abs(delta_cross_hat),
+                    cfg.sigma_floor * delta_sq_hat,
+                )
+            else:
+                sigma_sq = jnp.maximum(
+                    delta_sq_hat - state.m * dg_sq_hat, cfg.sigma_floor * delta_sq_hat
+                )
             gain = state.m * jnp.maximum(interaction, 0.0)
             denominator = (state.m * dg_sq + sigma_sq) * trace_sq + cfg.eps
             alpha = jnp.minimum(gain / denominator, cfg.alpha_max)
@@ -149,6 +170,8 @@ class Kalman:
             dg_sq_ema=dg_sq_ema,
             dim=state.dim,
             step=next_step,
+            delta_cross_ema=delta_cross_ema,
+            previous_delta=td_error,
         )
         lox.log(
             {
@@ -159,6 +182,8 @@ class Kalman:
                     else m
                 ),
                 f"{self.name}/sigma_sq": sigma_sq,
+                f"{self.name}/delta_sq": delta_sq_hat,
+                f"{self.name}/delta_cross": delta_cross_hat,
                 f"{self.name}/interaction": interaction,
                 f"{self.name}/trace_sq": trace_sq,
             }
