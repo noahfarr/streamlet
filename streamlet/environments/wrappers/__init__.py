@@ -1,5 +1,6 @@
 from gymnax.wrappers.purerl import GymnaxWrapper
 
+from .flatten_observation import FlattenObservationWrapper
 from .normalize_observation import (
     NormalizeObservationWrapper,
     NormalizeObservationWrapperState,
