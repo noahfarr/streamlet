@@ -4,6 +4,7 @@ from streamlet.environments import (
     brax,
     craftax,
     ett,
+    foragax,
     gymnasium,
     gymnax,
     minatar,
@@ -20,6 +21,7 @@ register = {
     "minatar": minatar.make,
     "craftax": craftax.make,
     "animax": animax.make,
+    "foragax": foragax.make,
 }
 
 

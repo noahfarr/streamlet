@@ -263,6 +263,14 @@ wheels = [
 ]
 
 [[package]]
+name = "continual-foragax"
+version = "0.57.1"
+source = { git = "ssh://git@github.com/steventango/continual-foragax.git#dafa3a63c45266eb04c4735e2a3e801ca8ca5681" }
+dependencies = [
+    { name = "gymnax" },
+]
+
+[[package]]
 name = "contourpy"
 version = "1.3.3"
 source = { registry = "https://pypi.org/simple" }
@@ -2336,6 +2344,7 @@ source = { editable = "." }
 dependencies = [
     { name = "animax" },
     { name = "brax" },
+    { name = "continual-foragax" },
     { name = "craftax" },
     { name = "distrax" },
     { name = "flax" },
@@ -2381,6 +2390,7 @@ requires-dist = [
     { name = "ale-py", extras = ["gymnasium"], marker = "extra == 'ale'" },
     { name = "animax", git = "ssh://git@github.com/noahfarr/blinx.git" },
     { name = "brax", specifier = ">=0.10.0" },
+    { name = "continual-foragax", git = "ssh://git@github.com/steventango/continual-foragax.git" },
     { name = "craftax", specifier = ">=1.5.0" },
     { name = "craftax", marker = "extra == 'craftax'" },
     { name = "distrax", specifier = ">=0.1.5" },
