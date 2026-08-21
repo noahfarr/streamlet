@@ -1,6 +1,7 @@
 from gymnax.wrappers.purerl import GymnaxWrapper
 
 from .flatten_observation import FlattenObservationWrapper
+from .log_average_reward import LogAverageReward, LogAverageRewardState
 from .normalize_observation import (
     NormalizeObservationWrapper,
     NormalizeObservationWrapperState,
