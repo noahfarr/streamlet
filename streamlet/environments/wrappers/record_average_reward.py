@@ -8,7 +8,7 @@ from streamlet.utils.typing import Array, EnvParams, Key
 
 
 @struct.dataclass
-class LogAverageRewardState:
+class RecordAverageRewardState:
     env_state: environment.EnvState
     reward_sum: float
     reward_rate: float
@@ -22,7 +22,7 @@ class LogAverageRewardState:
         return getattr(self.env_state, "unwrapped", self.env_state)
 
 
-class LogAverageReward:
+class RecordAverageReward:
     def __init__(self, env, beta: float = 1e-4):
         self._env = env
         self._beta = beta
@@ -32,22 +32,22 @@ class LogAverageReward:
 
     def reset(
         self, key: Key, params: EnvParams | None = None
-    ) -> tuple[Array, LogAverageRewardState]:
+    ) -> tuple[Array, RecordAverageRewardState]:
         obs, env_state = self._env.reset(key, params)
-        return obs, LogAverageRewardState(env_state, 0.0, 0.0, 0)
+        return obs, RecordAverageRewardState(env_state, 0.0, 0.0, 0)
 
     def step(
         self,
         key: Key,
-        state: LogAverageRewardState,
+        state: RecordAverageRewardState,
         action: int | float,
         params: EnvParams | None = None,
-    ) -> tuple[Array, LogAverageRewardState, Array, bool, dict[str, Any]]:
+    ) -> tuple[Array, RecordAverageRewardState, Array, bool, dict[str, Any]]:
         obs, env_state, reward, done, info = self._env.step(
             key, state.env_state, action, params
         )
         total_steps = state.total_steps + 1
-        state = LogAverageRewardState(
+        state = RecordAverageRewardState(
             env_state=env_state,
             reward_sum=state.reward_sum + reward,
             reward_rate=state.reward_rate + self._beta * (reward - state.reward_rate),
