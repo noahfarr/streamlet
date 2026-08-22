@@ -15,6 +15,11 @@ from .recurrent_q_lambda import (
     RecurrentQLambdaConfig,
     RecurrentQLambdaState,
 )
+from .soft_recurrent_q_lambda import (
+    SoftRecurrentQLambda,
+    SoftRecurrentQLambdaConfig,
+    SoftRecurrentQLambdaState,
+)
 from .recurrent_qrc_lambda import (
     RecurrentQRCLambda,
     RecurrentQRCLambdaConfig,
