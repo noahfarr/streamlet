@@ -2,6 +2,7 @@ from streamlet.environments import (
     ale,
     animax,
     brax,
+    classical_conditioning,
     craftax,
     ett,
     foragax,
@@ -14,6 +15,7 @@ from streamlet.environments import (
 register = {
     "gymnax": gymnax.make,
     "brax": brax.make,
+    "classical_conditioning": classical_conditioning.make,
     "gymnasium": gymnasium.make,
     "ale": ale.make,
     "ett": ett.make,

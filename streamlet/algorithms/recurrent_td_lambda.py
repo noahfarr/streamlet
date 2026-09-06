@@ -8,7 +8,7 @@ import lox
 from flax import core, struct
 
 from streamlet.optimizers import Optimizer
-from streamlet.utils import Timestep, Transition, canonicalize_dtype
+from streamlet.utils import Timestep, Transition
 from streamlet.utils.axes import remove_feature_axis
 from streamlet.utils.typing import Array, Environment, EnvParams, EnvState, Key, PyTree
 
@@ -54,11 +54,6 @@ class RecurrentTDLambda:
     def env_step(
         self, state: RecurrentTDLambdaState, key: Key
     ) -> tuple[RecurrentTDLambdaState, Transition]:
-        action_space = self.env.action_space(self.env_params)
-        action = jnp.zeros(
-            action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
-        )
-
         ((next_carry, value), auxiliary_losses), value_vjp = jax.vjp(
             lambda params: self.value_network.apply(
                 params, state.carry, *state.timestep, mutable=["auxiliary_losses"]
@@ -73,6 +68,7 @@ class RecurrentTDLambda:
             jax.tree.map(jnp.zeros_like, auxiliary_losses),
         ))
 
+        action = remove_feature_axis(value).astype(jnp.float32)
         next_obs, env_state, reward, done, info = self.env.step(
             key, state.env_state, action, self.env_params
         )
@@ -191,12 +187,8 @@ class RecurrentTDLambda:
     def init(self, key: Key) -> RecurrentTDLambdaState:
         env_key, value_key, carry_key = jax.random.split(key, 3)
         obs, env_state = self.env.reset(env_key, self.env_params)
-        action_space = self.env.action_space(self.env_params)
-        action = jnp.zeros(
-            action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
-        )
         timestep = Timestep(
-            obs=obs, action=action, reward=jnp.float32(0.0), done=jnp.bool_(True)
+            obs=obs, action=jnp.float32(0.0), reward=jnp.float32(0.0), done=jnp.bool_(True)
         )
 
         carry = self.value_network.initialize_carry(carry_key)
@@ -237,14 +229,11 @@ class RecurrentTDLambda:
         reset_key, carry_key, eval_key = jax.random.split(key, 3)
         obs, env_state = self.env.reset(reset_key, self.env_params)
 
-        action_space = self.env.action_space(self.env_params)
         state = state.replace(
             step=0,
             timestep=Timestep(
                 obs=obs,
-                action=jnp.zeros(
-                    action_space.shape, dtype=canonicalize_dtype(action_space.dtype)
-                ),
+                action=jnp.float32(0.0),
                 reward=jnp.float32(0.0),
                 done=jnp.bool_(True),
             ),

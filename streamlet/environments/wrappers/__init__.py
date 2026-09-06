@@ -11,6 +11,7 @@ from .observation_traces import (
     ObservationTracesWrapperState,
 )
 from .record_average_reward import RecordAverageReward, RecordAverageRewardState
+from .record_return_error import RecordReturnError, RecordReturnErrorState
 from .record_episode_statistics import (
     RecordEpisodeStatistics,
     RecordEpisodeStatisticsState,
