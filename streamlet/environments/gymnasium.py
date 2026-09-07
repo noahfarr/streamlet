@@ -13,11 +13,58 @@ class GymnasiumState:
     step: int = 0
 
 
-class GymnasiumWrapper:
-    def __init__(self, environment, batch_shape: tuple[int, ...] = (1,)):
-        import gymnasium_ffi
+class HostCallbackVectorEnv:
+    def __init__(self, environment):
+        self.env = environment
+        observation_space = environment.single_observation_space
+        action_space = environment.single_action_space
+        self._action_dtype = canonicalize_dtype(action_space.dtype)
+        self._observation = jax.ShapeDtypeStruct(
+            observation_space.shape, canonicalize_dtype(observation_space.dtype)
+        )
+        self._reward = jax.ShapeDtypeStruct((), jnp.float32)
+        self._done = jax.ShapeDtypeStruct((), jnp.bool_)
 
-        self._environment = gymnasium_ffi.VectorEnv(environment)
+    def _host_reset(self, seed):
+        seed = int(np.asarray(seed).reshape(-1)[0])
+        observation, _ = self.env.reset() if seed < 0 else self.env.reset(seed=seed)
+        return np.asarray(observation, dtype=self._observation.dtype)
+
+    def _host_step(self, action):
+        observation, reward, terminated, truncated, _ = self.env.step(
+            np.asarray(action, dtype=self._action_dtype)
+        )
+        return (
+            np.asarray(observation, dtype=self._observation.dtype),
+            np.asarray(reward, dtype=np.float32),
+            np.asarray(terminated, dtype=np.bool_),
+            np.asarray(truncated, dtype=np.bool_),
+        )
+
+    def reset(self, seed):
+        return jax.pure_callback(
+            self._host_reset, self._observation, seed, vmap_method="broadcast_all"
+        )
+
+    def step(self, action):
+        return jax.pure_callback(
+            self._host_step,
+            (self._observation, self._reward, self._done, self._done),
+            jnp.asarray(action, dtype=self._action_dtype),
+            vmap_method="broadcast_all",
+        )
+
+
+class GymnasiumWrapper:
+    def __init__(
+        self, environment, batch_shape: tuple[int, ...] = (1,), host_callback: bool = False
+    ):
+        if host_callback:
+            self._environment = HostCallbackVectorEnv(environment)
+        else:
+            import gymnasium_ffi
+
+            self._environment = gymnasium_ffi.VectorEnv(environment)
         self.batch_shape = tuple(batch_shape)
 
         observation_space = environment.single_observation_space
@@ -80,7 +127,9 @@ class GymnasiumWrapper:
         )
 
 
-def make(env_id, batch_shape: tuple[int, ...] = (1,), **kwargs) -> tuple:
+def make(
+    env_id, batch_shape: tuple[int, ...] = (1,), host_callback: bool = False, **kwargs
+) -> tuple:
     import gymnasium
     from gymnasium.vector import AutoresetMode
 
@@ -92,4 +141,4 @@ def make(env_id, batch_shape: tuple[int, ...] = (1,), **kwargs) -> tuple:
     environment = gymnasium.make_vec(
         env_id, num_envs=num_envs, vector_kwargs=vector_kwargs, **kwargs
     )
-    return GymnasiumWrapper(environment, batch_shape=batch_shape), None
+    return GymnasiumWrapper(environment, batch_shape=batch_shape, host_callback=host_callback), None
